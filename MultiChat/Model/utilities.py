@@ -51,37 +51,6 @@ def parameter_setting():
 
 
 
-# def load_ccc_data( args ):
-
-# 	print("spot location for adjancy")
-# 	spot_loc     = pd.read_table(args.spatialLocation, header = 0, index_col = 0, sep = ',')
-# 	dist_loc     = pairwise_distances(spot_loc.values, metric = args.locMeasure)
-
-# 	sorted_knn    = dist_loc.argsort(axis=1)
-# 	selected_node = []
-# 	#used_spots    = []
-# 	for index in list(range( np.shape(dist_loc)[0] )):
-# 		selected_node.append( sorted_knn[index, :11] )
-# 		#used_spots.extend( sorted_knn[index, :11] )
-# 	selected_node_df = pd.DataFrame(selected_node)
-# 	selected_node = np.array(selected_node)
-# 	selected_node  = torch.LongTensor(selected_node)
-# 	#used_spots     = torch.LongTensor(list(set(used_spots)))
-
-# 	print("spot-ligand data")
-# 	spots_ligand    = pd.read_table(args.Ligands_exp, header = 0, index_col = 0)
-# 	spots_ligand_n  = torch.FloatTensor(spots_ligand.values)
-
-# 	print("spot-receptor data")
-# 	spots_recep   = pd.read_table(args.Receptors_exp, header = 0, index_col = 0)
-# 	spots_recep_n = torch.FloatTensor(spots_recep.values)
-
-# 	pos   = pd.read_table(args.pos_pair, header = None, index_col = None).values
-# 	pos   = torch.FloatTensor(pos)
-
-# 	return selected_node, spots_ligand_n, spots_recep_n, pos, spots_ligand.index, spots_ligand.columns
-
-
 
 
 def get_cell_positive_pairs(cell_clus, cell_loc, args):
@@ -170,7 +139,6 @@ def perturb_pos_pair_row(row):
     return new_row
 
 
-#------------------------------
 
 
 def get_CCC_data(adata, latent, args, threthold = 5):
