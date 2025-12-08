@@ -62,43 +62,6 @@ def Preprocess_CCC_model(base_path, lr_database, cell_rep, expmatrix):
     return ligand_exps_n.T, receptor_exps_n.T
 
 
-def Preprocess_CCC_model_no_smoothing(base_path, lr_database, expmatrix):
-    '''
-    Use raw expression matrix without KNN smoothing, and normalize the expression of ligands and receptors.
-    '''
-    expmatrix_raw = expmatrix.copy()
-
-    LR_ls = lr_database.apply(lambda row: f"{row['Ligand_Symbol']}->{row['Receptor_Symbol']}", axis=1).tolist()
-
-    ligand_exps = []
-    for ligand in lr_database['Ligand_Symbol']:
-        if '_' in ligand:
-            genes = ligand.split('_')
-            mean_expression = expmatrix_raw.loc[genes, :].mean(axis=0)
-            ligand_exps.append(mean_expression)
-        else:
-            ligand_exps.append(expmatrix_raw.loc[ligand, :])
-    ligand_exps = pd.DataFrame(ligand_exps, index=LR_ls, columns=expmatrix_raw.columns)
-
-    receptor_exps = []
-    for receptor in lr_database['Receptor_Symbol']:
-        if '_' in receptor:
-            genes = receptor.split('_')
-            mean_expression = expmatrix_raw.loc[genes, :].mean(axis=0)
-            receptor_exps.append(mean_expression)
-        else:
-            receptor_exps.append(expmatrix_raw.loc[receptor, :])
-    receptor_exps = pd.DataFrame(receptor_exps, index=LR_ls, columns=expmatrix_raw.columns)
-
-    ligand_exps_n = (ligand_exps - ligand_exps.min(axis=1).values[:, None]) / (ligand_exps.max(axis=1).values[:, None] - ligand_exps.min(axis=1).values[:, None])
-    receptor_exps_n = (receptor_exps - receptor_exps.min(axis=1).values[:, None]) / (receptor_exps.max(axis=1).values[:, None] - receptor_exps.min(axis=1).values[:, None])
-
-    pd.DataFrame(ligand_exps_n.T).to_csv(os.path.join(base_path, "CCC/ligands_expression.txt"), sep="\t", index=True, header=True)
-    pd.DataFrame(receptor_exps_n.T).to_csv(os.path.join(base_path, "CCC/receptors_expression.txt"), sep="\t", index=True, header=True)
-
-    return ligand_exps_n.T, receptor_exps_n.T
-
-
 def select_peaks_by_genes_location(gene_info, hvg_genes, peaks_to_filter, scope = 250000):
     filtered_gene_info = preprocess_gene_info(gene_info, scope)
     gene_peaks = gene_peaks_pairs_by_location(filtered_gene_info, hvg_genes, peaks_to_filter)

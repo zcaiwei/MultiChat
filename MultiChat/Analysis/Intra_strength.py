@@ -616,54 +616,6 @@ def calculate_l_r_tf_tg_strength_by_tg(
     print(f"All TG networks saved to {output_dir}")
 
 
-    
-def scell_to_celltype_mean(
-    cell_type_path: str,      
-    input_dir: str,           
-    output_dir: str,          
-    cell_type_col: str = "cell_type",  
-    csv_index_col: int = 0,   
-    verbose: bool = True      
-) -> None:
-    """
-    将single-cell level的预测强度计算均值得到cell-type level
-    """
-    # 读取样本类型信息
-    cell_type_df = pd.read_csv(cell_type_path, index_col=0, sep="\t")
-    
-    # 创建输出文件夹
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 遍历输入文件夹中的CSV文件
-    for filename in os.listdir(input_dir):
-        if filename.endswith(".csv"):
-            if verbose:
-                print(f"Processing: {filename}")
-            
-            # 读取CSV文件
-            filepath = os.path.join(input_dir, filename)
-            df = pd.read_csv(filepath, index_col=csv_index_col)
-            
-            # 检查样本名是否匹配
-            common_samples = df.index.intersection(cell_type_df.index)
-            if len(common_samples) == 0:
-                if verbose:
-                    print(f"  Warning: No matching samples found. Skipping.")
-                continue
-            
-            # 添加样本类型列并分组计算均值
-            df = df.loc[common_samples]
-            df[cell_type_col] = cell_type_df.loc[common_samples, cell_type_col]
-            ct_df = df.groupby(cell_type_col).mean()
-            
-            # 保存结果
-            output_filepath = os.path.join(output_dir, filename)
-            ct_df.to_csv(output_filepath)
-    
-    if verbose:
-        print("All files processed!") 
-
-
 
 def generate_background_l_r_tf_tg_strength(
     l_r_tf_tg_df: pd.DataFrame,
@@ -890,160 +842,6 @@ def _process_single_ligand(
 
 
 
-def generate_background_l_r_tf_tg_strength_parallel_with_lexp(
-    l_r_tf_tg_df: pd.DataFrame,
-    combined_npz_path: str,
-    global_row_names_path: str,
-    global_col_names_path: str,
-    ccc_lrp_path: str,
-    expression_matrix: pd.DataFrame,  
-    output_dir: str = "random_ligand_cascade_results",
-    random_seed: int = 42,
-    n_processes: int = None
-) -> None:
-
-    # 1. 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 2. 加载数据
-    print("Loading data...")
-    try:
-        original_sparse = load_npz(combined_npz_path).tocsc()
-        with open(global_row_names_path, 'r') as f:
-            cell_names = json.load(f)
-        with open(global_col_names_path, 'r') as f:
-            r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
-        
-        # 确保表达矩阵的细胞名与其他数据一致
-        expression_matrix = expression_matrix[cell_names]
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
-    print("Data loaded successfully")
-    
-    # 3. 生成背景稀疏矩阵（行排列）
-    print("Generating background data by row permutation...")
-    np.random.seed(random_seed)
-    nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    background_matrices = []
-
-    for _ in range(10):
-        new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
-        permuted_indices = np.arange(original_sparse.shape[0])
-        permuted_indices[nonzero_rows] = new_nonzero_rows
-        
-        background_sparse = csc_matrix(
-            (original_sparse.data, 
-             permuted_indices[original_sparse.indices], 
-             original_sparse.indptr),
-            shape=original_sparse.shape
-        )
-        background_matrices.append(background_sparse)
-
-    final_background_sparse = vstack(background_matrices)
-    final_cell_names = cell_names * 10
-    
-    # 4. 构建受体-TF-TG到列索引的映射
-    r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
-
-    # 5. 预计算全零的l-r对
-    print("Identifying zero L-R pairs...")
-    zero_lr_pairs = set()
-    for col in ccc_lrp_df.columns:
-        if np.all(ccc_lrp_df[col] == 0):
-            zero_lr_pairs.add(col)
-    print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
-
-    # 6. 准备多进程处理
-    ligands = l_r_tf_tg_df['Ligand_Symbol'].unique()
-    
-    # 创建partial函数固定共享参数
-    process_ligand_partial = partial(
-        _process_single_ligand_background,
-        l_r_tf_tg_df=l_r_tf_tg_df,
-        ccc_lrp_df=ccc_lrp_df,
-        r_tf_tg_to_col=r_tf_tg_to_col,
-        zero_lr_pairs=zero_lr_pairs,
-        final_background_sparse=final_background_sparse,
-        final_cell_names=final_cell_names,
-        expression_matrix=expression_matrix,  # 传入表达矩阵
-        output_dir=output_dir
-    )
-    
-    # 设置进程数
-    if n_processes is None:
-        n_processes = multiprocessing.cpu_count() - 1
-    
-    print(f"Starting parallel processing with {n_processes} processes...")
-    with multiprocessing.Pool(processes=n_processes) as pool:
-        pool.map(process_ligand_partial, ligands)
-    
-    print(f"Processing completed. Results saved to {output_dir}")
-
-def _process_single_ligand_background(
-    ligand: str,
-    l_r_tf_tg_df: pd.DataFrame,
-    ccc_lrp_df: pd.DataFrame,
-    r_tf_tg_to_col: dict,
-    zero_lr_pairs: set,
-    final_background_sparse: csc_matrix,
-    final_cell_names: list,
-    expression_matrix: pd.DataFrame,  # 新增表达矩阵参数
-    output_dir: str
-) -> None:
-    """处理单个ligand的辅助函数（背景数据版本）"""
-    ligand_subdf = l_r_tf_tg_df[l_r_tf_tg_df['Ligand_Symbol'] == ligand]
-    result_data = {}
-    
-    # 检查ligand是否在表达矩阵中
-    if ligand not in expression_matrix.index:
-        if '_' in ligand:
-            ligand_components = ligand.split('_')
-            available_components = [comp for comp in ligand_components if comp in expression_matrix.index]
-            if not available_components:
-                # print(f"Warning: Ligand {ligand} not found in expression matrix")
-                return
-            ligand_expression = expression_matrix.loc[available_components].mean(axis=0).values
-            # print(f"Using average expression for ligand {ligand}: {available_components}")
-        else:
-            # print(f"Warning: Ligand {ligand} not found in expression matrix")
-            return
-    else:
-        ligand_expression = expression_matrix.loc[ligand].values
-    
-    # 获取ligand表达值（重复10次以匹配背景数据）
-    # ligand_expression = np.tile(ligand_expression, 10)
-    
-    for _, row in ligand_subdf.iterrows():
-        receptor = row['Receptor_Symbol']
-        tf = row['TF_Symbol']
-        tg = row['TG_Symbol']
-        l_r_pair = f"{ligand}->{receptor}"
-        r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
-        
-        if l_r_pair in zero_lr_pairs:
-            continue
-        if l_r_pair not in ccc_lrp_df.columns:
-            continue
-        if r_tf_tg_pair not in r_tf_tg_to_col:
-            continue
-            
-        col_idx = r_tf_tg_to_col[r_tf_tg_pair]
-        # inter_signal = np.tile(ccc_lrp_df[l_r_pair].values, 10)  # 重复10次匹配背景数据
-        inter_signal = ccc_lrp_df[l_r_pair].values
-        intra_signal = final_background_sparse[:, col_idx].toarray().flatten()
-        
-        # 计算总信号强度（乘以ligand表达值）
-        total_signal = inter_signal * intra_signal * ligand_expression
-        pathway = f"{ligand}->{receptor}->{tf}->{tg}"
-        result_data[pathway] = total_signal
-    
-    if result_data:
-        result_df = pd.DataFrame(result_data, index=final_cell_names)
-        result_df.to_csv(f"{output_dir}/{ligand}.csv", index=True)
-
-
 
 def generate_background_l_r_tf_tg_strength_by_tg(
     l_r_tf_tg_df: pd.DataFrame,
@@ -1055,12 +853,10 @@ def generate_background_l_r_tf_tg_strength_by_tg(
     random_seed: int = 42
 ) -> None:
     """
-    通过行排列生成按TG分组的背景数据
+    Generate background data grouped by TG through permutation
     """
-    # 1. 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         original_sparse = load_npz(combined_npz_path).tocsc()
@@ -1074,20 +870,14 @@ def generate_background_l_r_tf_tg_strength_by_tg(
         return
     print("Data loaded successfully")
 
-    # 3. 生成背景稀疏矩阵（行排列）
     print("Generating background matrix by row permutation...")
     np.random.seed(random_seed)
     
-    # 获取非零行索引
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    # 新的非零行应该是一个和原来相同长度的索引列表，但具有不同的行索引
     new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
-    # 创建排列索引
     permuted_indices = np.arange(original_sparse.shape[0])
     permuted_indices[nonzero_rows] = new_nonzero_rows
-    # permuted_indices[nonzero_rows] = np.random.permutation(nonzero_rows) #仅扰动稀疏矩阵中非零行的顺序
     
-    # 应用排列
     background_sparse = csc_matrix(
         (original_sparse.data, 
          permuted_indices[original_sparse.indices], 
@@ -1095,14 +885,10 @@ def generate_background_l_r_tf_tg_strength_by_tg(
         shape=original_sparse.shape
     )
 
-    # 4. 构建映射
-    # 4.1 受体-TF-TG 到列索引的映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
     
-    # 4.2 Ligand-Receptor 到列索引的映射（ccc_lrp_df）
     l_r_pairs = ccc_lrp_df.columns
 
-    # 5. 预计算全零的 L-R 对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -1110,11 +896,9 @@ def generate_background_l_r_tf_tg_strength_by_tg(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 6. 按 TG 分组处理背景数据
     all_tgs = l_r_tf_tg_df["TG_Symbol"].unique()
     
     for tg in tqdm(all_tgs, desc="Processing TGs (background)"):
-        # 6.1 获取该 TG 的所有路径
         tg_subset = l_r_tf_tg_df[l_r_tf_tg_df["TG_Symbol"] == tg]
         tg_data = {}
 
@@ -1125,25 +909,20 @@ def generate_background_l_r_tf_tg_strength_by_tg(
             l_r_pair = f"{ligand}->{receptor}"
             r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
 
-            # 跳过全零的 L-R 对
             if l_r_pair in zero_lr_pairs:
                 continue
 
-            # 检查路径是否存在
             if l_r_pair not in l_r_pairs or r_tf_tg_pair not in r_tf_tg_to_col:
                 continue
 
-            # 6.2 计算背景信号强度
-            l_r_signal = ccc_lrp_df[l_r_pair].values  # L->R 信号（保持不变）
+            l_r_signal = ccc_lrp_df[l_r_pair].values  
             r_tf_tg_col = r_tf_tg_to_col[r_tf_tg_pair]
-            r_tf_tg_signal = background_sparse[:, r_tf_tg_col].toarray().flatten()  # R->TF->TG 信号（背景）
-            total_signal = l_r_signal * r_tf_tg_signal  # L->R->TF->TG 信号（背景）
+            r_tf_tg_signal = background_sparse[:, r_tf_tg_col].toarray().flatten()  
+            total_signal = l_r_signal * r_tf_tg_signal  
 
-            # 存储路径和信号
             path = f"{ligand}->{receptor}->{tf}->{tg}"
             tg_data[path] = total_signal
 
-        # 6.3 保存该 TG 的背景数据
         if tg_data:
             tg_df = pd.DataFrame(tg_data, index=cell_names)
             tg_df.to_csv(os.path.join(output_dir, f"{tg}.csv"), index=True)
@@ -1162,13 +941,9 @@ def generate_background_l_r_tf_tg_strength_by_tg_parallel(
     random_seed: int = 42,
     n_processes: int = None
 ) -> None:
-    """
-    通过行排列生成按TG分组的背景数据（并行版本）
-    """
-    # 1. 创建输出目录
+
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         original_sparse = load_npz(combined_npz_path).tocsc()
@@ -1185,7 +960,6 @@ def generate_background_l_r_tf_tg_strength_by_tg_parallel(
     final_cell_names = cell_names * 10
     print("Final cell names length:", len(final_cell_names))
 
-    # 3. 生成背景稀疏矩阵（行排列）
     print("Generating background matrix by row permutation...")
     np.random.seed(random_seed)
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
@@ -1207,11 +981,9 @@ def generate_background_l_r_tf_tg_strength_by_tg_parallel(
     final_background_sparse = vstack(background_matrices)
     print("Final background sparse matrix shape:", final_background_sparse.shape)
 
-    # 4. 构建映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
     l_r_pairs = ccc_lrp_df.columns
 
-    # 5. 预计算全零的 L-R 对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -1219,10 +991,8 @@ def generate_background_l_r_tf_tg_strength_by_tg_parallel(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 6. 准备并行处理
     all_tgs = l_r_tf_tg_df["TG_Symbol"].unique()
     
-    # 创建partial函数固定共享参数
     process_tg_partial = partial(
         _process_single_tg_background,
         l_r_tf_tg_df=l_r_tf_tg_df,
@@ -1235,7 +1005,6 @@ def generate_background_l_r_tf_tg_strength_by_tg_parallel(
         output_dir=output_dir
     )
     
-    # 设置进程数
     if n_processes is None:
         n_processes = multiprocessing.cpu_count() - 1
     
@@ -1262,7 +1031,6 @@ def _process_single_tg_background(
     l_r_pairs: list,
     output_dir: str
 ) -> None:
-    """处理单个TG背景数据的辅助函数"""
     tg_subset = l_r_tf_tg_df[l_r_tf_tg_df["TG_Symbol"] == tg]
     tg_data = {}
 
@@ -1289,231 +1057,7 @@ def _process_single_tg_background(
     if tg_data:
         tg_df = pd.DataFrame(tg_data, index=final_cell_names)
         tg_df.to_csv(os.path.join(output_dir, f"{tg}.csv"), index=True)
-    
-    
-def generate_background_l_r_tf_tg_strength_by_tg_parallel_with_lexp(
-    l_r_tf_tg_df: pd.DataFrame,
-    combined_npz_path: str,
-    global_row_names_path: str,
-    global_col_names_path: str,
-    ccc_lrp_path: str,
-    expression_matrix: pd.DataFrame,
-    output_dir: str = "random_TG_cascade_results",
-    random_seed: int = 42,
-    n_processes: int = None
-) -> None:
-    """
-    通过行排列生成按TG分组的背景数据（并行版本）
-    """
-    # 1. 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 2. 加载数据
-    print("Loading data...")
-    try:
-        original_sparse = load_npz(combined_npz_path).tocsc()
-        with open(global_row_names_path, 'r') as f:
-            cell_names = json.load(f)
-        with open(global_col_names_path, 'r') as f:
-            r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
-        
-        expression_matrix = expression_matrix[cell_names]  
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
-    print("Data loaded successfully")
-    
-    final_cell_names = cell_names * 10
-    print("Final cell names length:", len(final_cell_names))
-
-    # 3. 生成背景稀疏矩阵（行排列）
-    print("Generating background matrix by row permutation...")
-    np.random.seed(random_seed)
-    nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    background_matrices = []
-    
-    for _ in range(10):
-        new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
-        permuted_indices = np.arange(original_sparse.shape[0])
-        permuted_indices[nonzero_rows] = new_nonzero_rows
-        
-        background_sparse = csc_matrix(
-            (original_sparse.data, 
-            permuted_indices[original_sparse.indices], 
-            original_sparse.indptr),
-            shape=original_sparse.shape
-        )
-        background_matrices.append(background_sparse)
-
-    final_background_sparse = vstack(background_matrices)
-    print("Final background sparse matrix shape:", final_background_sparse.shape)
-
-    # 4. 构建映射
-    r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
-    l_r_pairs = ccc_lrp_df.columns
-
-    # 5. 预计算全零的 L-R 对
-    print("Identifying zero L-R pairs...")
-    zero_lr_pairs = set()
-    for col in ccc_lrp_df.columns:
-        if np.all(ccc_lrp_df[col] == 0):
-            zero_lr_pairs.add(col)
-    print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
-
-    # 6. 准备并行处理
-    all_tgs = l_r_tf_tg_df["TG_Symbol"].unique()
-    
-    # 创建partial函数固定共享参数
-    process_tg_partial = partial(
-        _process_single_tg_background_with_lexp,
-        l_r_tf_tg_df=l_r_tf_tg_df,
-        ccc_lrp_df=ccc_lrp_df,
-        r_tf_tg_to_col=r_tf_tg_to_col,
-        zero_lr_pairs=zero_lr_pairs,
-        final_background_sparse=final_background_sparse,
-        final_cell_names=final_cell_names,
-        l_r_pairs=l_r_pairs,
-        expression_matrix=expression_matrix,  
-        output_dir=output_dir
-    )
-    
-    # 设置进程数
-    if n_processes is None:
-        n_processes = multiprocessing.cpu_count() - 1
-    
-    print(f"Starting parallel processing with {n_processes} processes...")
-    with multiprocessing.Pool(processes=n_processes) as pool:
-        list(tqdm(
-            pool.imap(process_tg_partial, all_tgs),
-            total=len(all_tgs),
-            desc="Processing TGs (background)"
-        ))
-        # pool.map(process_tg_partial, all_tgs)
-    
-    print(f"Background data generation completed. Results saved to {output_dir}")    
-    
-    
-
-def _process_single_tg_background_with_lexp(
-    tg: str,
-    l_r_tf_tg_df: pd.DataFrame,
-    ccc_lrp_df: pd.DataFrame,
-    r_tf_tg_to_col: dict,
-    zero_lr_pairs: set,
-    final_background_sparse: csc_matrix,
-    final_cell_names: list,
-    l_r_pairs: list,
-    expression_matrix: pd.DataFrame,  
-    output_dir: str
-) -> None:
-    """处理单个TG背景数据的辅助函数"""
-    tg_subset = l_r_tf_tg_df[l_r_tf_tg_df["TG_Symbol"] == tg]
-    tg_data = {}
-
-    for _, row in tg_subset.iterrows():
-        ligand = row["Ligand_Symbol"]
-        receptor = row["Receptor_Symbol"]
-        tf = row["TF_Symbol"]
-        l_r_pair = f"{ligand}->{receptor}"
-        r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
-        
-        if ligand not in expression_matrix.index:
-            if '_' in ligand:
-                ligand_components = ligand.split('_')
-                available_components = [comp for comp in ligand_components if comp in expression_matrix.index]
-                if not available_components:
-                    # print(f"Warning: Ligand {ligand} not found in expression matrix")
-                    continue
-                ligand_expression = expression_matrix.loc[available_components].mean(axis=0).values
-                # print(f"Using average expression for ligand {ligand}: {available_components}")
-            else:
-                continue
-        else:
-            ligand_expression = expression_matrix.loc[ligand].values
-        
-        if l_r_pair in zero_lr_pairs:
-            continue
-        if l_r_pair not in l_r_pairs or r_tf_tg_pair not in r_tf_tg_to_col:
-            continue
-
-        l_r_signal = ccc_lrp_df[l_r_pair].values
-        r_tf_tg_col = r_tf_tg_to_col[r_tf_tg_pair]
-        r_tf_tg_signal = final_background_sparse[:, r_tf_tg_col].toarray().flatten()
-        total_signal = l_r_signal * r_tf_tg_signal * ligand_expression  
-
-        path = f"{ligand}->{receptor}->{tf}->{tg}"
-        tg_data[path] = total_signal
-
-    if tg_data:
-        tg_df = pd.DataFrame(tg_data, index=final_cell_names)
-        tg_df.to_csv(os.path.join(output_dir, f"{tg}.csv"), index=True)
-
-
-
-
-def get_Inter_Strength(
-    att_df: pd.DataFrame,
-    base_path: str,
-    selected_cell_type: str
-) :
-    nei_adj = pd.read_csv(f"{base_path}/Nei_adj_{selected_cell_type}.csv", index_col=None, header=None, sep="\t")
-    rna_mat = pd.read_csv(f"{base_path}CCC/expression_smooth_{selected_cell_type}.txt", header=0, index_col=0, sep="\t")
-    
-    lig_mat = pd.DataFrame(index=rna_mat.index, columns=rna_mat.columns)
-    for i, row in tqdm(nei_adj.iterrows(), desc="Processing rows", total=nei_adj.shape[0]):
-        cell_name = rna_mat.columns[i]
-        sender_idxs = row[1:].dropna().astype(int)
-        if len(sender_idxs) == 0:
-            lig_mat.iloc[i] = 0 
-        else:
-            sender_idxs = sender_idxs - 1
-            sender_expr = rna_mat.iloc[:, sender_idxs]
-            mean_expr = sender_expr.mean(axis=1)
-            lig_mat[cell_name] = mean_expr.values
-    lig_mat_minmax = (lig_mat - lig_mat.min()) / (lig_mat.max() - lig_mat.min())
-    rna_mat_minmax = (rna_mat - rna_mat.min()) / (rna_mat.max() - rna_mat.min())
-    
-    lig_expr_df = pd.DataFrame(index=att_df.index, columns=att_df.columns)
-    rec_expr_df = pd.DataFrame(index=att_df.index, columns=att_df.columns)
-    
-    for pair in att_df.columns:
-        lig, rec = pair.split('->')
-        
-        if '_' in lig:
-            valid_lig_components = [gene for gene in lig_components if gene in lig_mat_minmax.index]
-            if len(valid_lig_components) > 0:
-
-                lig_expr = lig_mat_minmax.loc[valid_lig_components].mean(axis=0)
-                lig_expr_df[pair] = lig_expr.values
-            else:
-                lig_expr_df[pair] = 0
-            lig_components = lig.split('_')
-            lig_expr_df[pair] = lig_mat_minmax[lig_components].min(axis=1)
-        else:
-            lig_expr_df[pair] = lig_mat_minmax.loc[lig] if lig in lig_mat_minmax.index else 0
-        
-        if '_' in rec:
-            rec_components = rec.split('_')
-            valid_rec_components = [gene for gene in rec_components if gene in rna_mat_minmax.index]
-            if len(valid_rec_components) > 0:
-                rec_expr = rna_mat_minmax.loc[valid_rec_components].mean(axis=0)
-                rec_expr_df[pair] = rec_expr.values
-            else:
-                rec_expr_df[pair] = 0
-        else:
-            rec_expr_df[pair] = rna_mat_minmax.loc[rec] if rec in rna_mat_minmax.index else 0
-    
-    # result = att_df * lig_expr_df * rec_expr_df
-    result = att_df * lig_expr_df
-    result.to_csv(f"{base_path}Inter_strength_{selected_cell_type}.txt", sep="\t")
-    # weight_df = lig_expr_df * rec_expr_df
-    weight_df = lig_expr_df
-    weight_df.to_csv(f"{base_path}Inter_strength_weight_{selected_cell_type}.txt", sep="\t")
-    
-    return result, weight_df
-
-   
+       
 
 
 def load_background_inter(base_path, file_pattern="CCC_module_LRP_strength_run_*.txt"):
@@ -1758,10 +1302,8 @@ def calculate_l_r_tf_tg_strength_cellwise(
     ccc_lrp_path: str,
     output_dir: str = "cellwise_cascade_results"
 ) -> None:
-    # 1. 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         combined_sparse = load_npz(combined_npz_path).tocsc()
@@ -1775,10 +1317,8 @@ def calculate_l_r_tf_tg_strength_cellwise(
         return
     print("Data loaded successfully")
 
-    # 3. 构建受体-TF-TG到列索引的映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
 
-    # 4. 预计算全零的l-r对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -1786,7 +1326,6 @@ def calculate_l_r_tf_tg_strength_cellwise(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 5. 处理每个ligand
     print("Processing all ligand-receptor-TF-TG paths...")
     result_data = {}
         
@@ -1799,30 +1338,23 @@ def calculate_l_r_tf_tg_strength_cellwise(
         r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
         path = f"{ligand}->{receptor}->{tf}->{tg}"
         
-        # 跳过全零的l-r对
         if l_r_pair in zero_lr_pairs:
             continue
             
-        # 检查l-r对是否存在
         if l_r_pair not in ccc_lrp_df.columns:
             continue
             
-        # 检查r-tf-tg对是否存在
         if r_tf_tg_pair not in r_tf_tg_to_col:
             continue
             
-        # 获取列索引
         col_idx = r_tf_tg_to_col[r_tf_tg_pair]
+
+        inter_signal = ccc_lrp_df[l_r_pair].values  
+        intra_signal = combined_sparse[:, col_idx].toarray().flatten()  
         
-        # 获取信号
-        inter_signal = ccc_lrp_df[l_r_pair].values  # l->r信号
-        intra_signal = combined_sparse[:, col_idx].toarray().flatten()  # r->tf->tg信号
-        
-        # 计算总信号强度
         total_signal = inter_signal * intra_signal
         result_data[path] = total_signal
         
-    # 保存该ligand的结果
     if result_data:
         result_df = pd.DataFrame(result_data, index=cell_names)
         output_path = os.path.join(output_dir, "cellwise_cascade_results.csv")
@@ -1839,15 +1371,13 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
     global_row_names_path: str,
     global_col_names_path: str,
     ccc_lrp_path: str,
-    expression_matrix: pd.DataFrame,  # 新增：表达矩阵 (cells x genes)
+    expression_matrix: pd.DataFrame,  
     output_dir: str = None,
     output_file: str = "cellwise_cascade_results.csv"
 ) -> None:
 
-    # 1. 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         combined_sparse = load_npz(combined_npz_path).tocsc()
@@ -1862,10 +1392,8 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
         return
     print("Data loaded successfully")
 
-    # 3. 构建受体-TF-TG到列索引的映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
 
-    # 4. 预计算全零的l-r对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -1873,7 +1401,6 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 5. 处理所有ligand-receptor-TF-TG路径
     print("Processing all ligand-receptor-TF-TG paths...")
     result_data = {}
     
@@ -1886,19 +1413,15 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
         r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
         path = f"{ligand}->{receptor}->{tf}->{tg}"
         
-        # 跳过全零的l-r对
         if l_r_pair in zero_lr_pairs:
             continue
             
-        # 检查l-r对是否存在
         if l_r_pair not in ccc_lrp_df.columns:
             continue
             
-        # 检查r-tf-tg对是否存在
         if r_tf_tg_pair not in r_tf_tg_to_col:
             continue
             
-        # 检查ligand是否在表达矩阵中
         if ligand not in expression_matrix.index:
             if '_' in ligand:
                 ligand_components = ligand.split('_')
@@ -1915,18 +1438,14 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
             ligand_expression = expression_matrix.loc[ligand].values
             
         
-        # 获取列索引
         col_idx = r_tf_tg_to_col[r_tf_tg_pair]
         
-        # 获取信号
-        inter_signal = ccc_lrp_df[l_r_pair].values  # l->r信号
-        intra_signal = combined_sparse[:, col_idx].toarray().flatten()  # r->tf->tg信号
+        inter_signal = ccc_lrp_df[l_r_pair].values  
+        intra_signal = combined_sparse[:, col_idx].toarray().flatten()  
         
-        # 计算总信号强度（乘以ligand表达值）
         total_signal = inter_signal * intra_signal * ligand_expression
         result_data[path] = total_signal
     
-    # 保存结果
     if result_data:
         result_df = pd.DataFrame(result_data, index=cell_names)
         output_path = os.path.join(output_dir+output_file)
@@ -1948,10 +1467,8 @@ def generate_background_l_r_tf_tg_strength_cellwise(
     random_seed: int = 42
 ) -> None:
 
-    # 1. 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         original_sparse = load_npz(combined_npz_path).tocsc()
@@ -1968,24 +1485,17 @@ def generate_background_l_r_tf_tg_strength_cellwise(
     final_cell_names = cell_names * 10
     print("Final cell names length:", len(final_cell_names))
     
-    # 3. 生成背景稀疏矩阵（行排列）
     print("Generating background data by row permutation...")
     np.random.seed(random_seed) 
-    # 获取非零行索引
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    # 创建一个列表存储多个背景稀疏矩阵
     background_matrices = []
 
-    # 重复生成10次
     for _ in range(10):
-        # 新的非零行应该是一个和原来相同长度的索引列表，但具有不同的行索引
         new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
         
-        # 创建排列索引
         permuted_indices = np.arange(original_sparse.shape[0])
         permuted_indices[nonzero_rows] = new_nonzero_rows
         
-        # 应用排列生成背景稀疏矩阵
         background_sparse = csc_matrix(
             (original_sparse.data, 
             permuted_indices[original_sparse.indices], 
@@ -1993,19 +1503,14 @@ def generate_background_l_r_tf_tg_strength_cellwise(
             shape=original_sparse.shape
         )
         
-        # 将生成的矩阵添加到列表中
         background_matrices.append(background_sparse)
 
-    # 将多个背景稀疏矩阵按行堆叠
     final_background_sparse = vstack(background_matrices)
 
-    # 查看最终生成的稀疏矩阵的形状
     print("Final background sparse matrix shape:", final_background_sparse.shape)
 
-    # 4. 构建受体-TF-TG到列索引的映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
 
-    # 5. 预计算全零的l-r对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -2013,7 +1518,6 @@ def generate_background_l_r_tf_tg_strength_cellwise(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 6. 处理每个ligand
     print("Processing all ligand-receptor-TF-TG paths on randomized background...")
     result_data = {}
         
@@ -2026,30 +1530,23 @@ def generate_background_l_r_tf_tg_strength_cellwise(
         r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
         path = f"{ligand}->{receptor}->{tf}->{tg}"
         
-        # 跳过全零的l-r对
         if l_r_pair in zero_lr_pairs:
             continue
             
-        # 检查l-r对是否存在
         if l_r_pair not in ccc_lrp_df.columns:
             continue
             
-        # 检查r-tf-tg对是否存在
         if r_tf_tg_pair not in r_tf_tg_to_col:
             continue
             
-        # 获取列索引
         col_idx = r_tf_tg_to_col[r_tf_tg_pair]
         
-        # 获取信号
-        inter_signal = ccc_lrp_df[l_r_pair].values  # l->r信号
-        intra_signal = final_background_sparse[:, col_idx].toarray().flatten()  # r->tf->tg信号
+        inter_signal = ccc_lrp_df[l_r_pair].values  
+        intra_signal = final_background_sparse[:, col_idx].toarray().flatten()  
         
-        # 计算总信号强度
         total_signal = inter_signal * intra_signal
         result_data[path] = total_signal
     
-    # 保存该ligand的结果
     if result_data:
         result_df = pd.DataFrame(result_data, index=final_cell_names)
         output_path = os.path.join(output_dir+"background_cellwise_cascade_results.csv")
@@ -2071,13 +1568,9 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
     output_file: str = "background_cellwise_cascade_results.csv",
     random_seed: int = 42
 ) -> None:
-    """
-    通过行排列生成背景数据，计算每个l-r-tf-tg的strength
-    """
-    # 1. 创建输出目录
+
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. 加载数据
     print("Loading data...")
     try:
         original_sparse = load_npz(combined_npz_path).tocsc()
@@ -2095,24 +1588,17 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
     final_cell_names = cell_names * 10
     print("Final cell names length:", len(final_cell_names))
     
-    # 3. 生成背景稀疏矩阵（行排列）
     print("Generating background data by row permutation...")
     np.random.seed(random_seed) 
-    # 获取非零行索引
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    # 创建一个列表存储多个背景稀疏矩阵
     background_matrices = []
 
-    # 重复生成10次
     for _ in range(10):
-        # 新的非零行应该是一个和原来相同长度的索引列表，但具有不同的行索引
         new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
         
-        # 创建排列索引
         permuted_indices = np.arange(original_sparse.shape[0])
         permuted_indices[nonzero_rows] = new_nonzero_rows
         
-        # 应用排列生成背景稀疏矩阵
         background_sparse = csc_matrix(
             (original_sparse.data, 
             permuted_indices[original_sparse.indices], 
@@ -2120,19 +1606,14 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
             shape=original_sparse.shape
         )
         
-        # 将生成的矩阵添加到列表中
         background_matrices.append(background_sparse)
 
-    # 将多个背景稀疏矩阵按行堆叠
     final_background_sparse = vstack(background_matrices)
 
-    # 查看最终生成的稀疏矩阵的形状
     print("Final background sparse matrix shape:", final_background_sparse.shape)
 
-    # 4. 构建受体-TF-TG到列索引的映射
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
 
-    # 5. 预计算全零的l-r对
     print("Identifying zero L-R pairs...")
     zero_lr_pairs = set()
     for col in ccc_lrp_df.columns:
@@ -2140,7 +1621,6 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
             zero_lr_pairs.add(col)
     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    # 6. 处理每个ligand
     print("Processing all ligand-receptor-TF-TG paths on randomized background...")
     result_data = {}
         
@@ -2153,19 +1633,15 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
         r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
         path = f"{ligand}->{receptor}->{tf}->{tg}"
         
-        # 跳过全零的l-r对
         if l_r_pair in zero_lr_pairs:
             continue
             
-        # 检查l-r对是否存在
         if l_r_pair not in ccc_lrp_df.columns:
             continue
             
-        # 检查r-tf-tg对是否存在
         if r_tf_tg_pair not in r_tf_tg_to_col:
             continue
         
-        # 检查ligand是否在表达矩阵中
         if ligand not in expression_matrix.index:
             if '_' in ligand:
                 ligand_components = ligand.split('_')
@@ -2183,18 +1659,14 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
 
 
             
-        # 获取列索引
         col_idx = r_tf_tg_to_col[r_tf_tg_pair]
         
-        # 获取信号
-        inter_signal = ccc_lrp_df[l_r_pair].values  # l->r信号
-        intra_signal = final_background_sparse[:, col_idx].toarray().flatten()  # r->tf->tg信号
+        inter_signal = ccc_lrp_df[l_r_pair].values  
+        intra_signal = final_background_sparse[:, col_idx].toarray().flatten()  
         
-        # 计算总信号强度
         total_signal = inter_signal * intra_signal * ligand_expression
         result_data[path] = total_signal
     
-    # 保存该ligand的结果
     if result_data:
         result_df = pd.DataFrame(result_data, index=final_cell_names)
         output_path = os.path.join(output_dir+output_file)
@@ -2204,59 +1676,6 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
         print("No valid background paths found.")   
         
         
-
-# def Indentify_volatile_paths_celltype(data, threshold=None, method='mad'):
-#     volatility_df = pd.DataFrame(
-#         index=data.index,
-#         columns=data.columns,
-#         dtype=float
-#     )
-#     outlier_report = {}
-
-#     for path in data.columns:
-#         values = data[path].values
-
-#         if method == 'median':
-#             median = np.median(values)
-#             adjusted_median = median if median != 0 else 1e-10
-#             scores = np.abs(values - median) / adjusted_median
-#             # scores = np.abs(values - np.median(values)) / np.median(values)
-#             volatility_df[path] = scores
-#             path_threshold = 0.3 if threshold is None else threshold
-#         elif method == 'mad':
-#             scores = mad_based_score(values)
-#             volatility_df[path] = scores
-#             path_threshold = 2.5 if threshold is None else threshold
-#         elif method == 'mean':
-#             mean = np.mean(values)
-#             adjusted_mean = mean if mean != 0 else 1e-10
-#             scores = np.abs(values - mean) / adjusted_mean
-#             volatility_df[path] = scores
-#             path_threshold = 0.3 if threshold is None else threshold
-#         else:
-#             raise ValueError("method must be 'median' or 'mad' or 'mean")
-
-#         outliers = volatility_df[path][volatility_df[path] > path_threshold]
-#         if not outliers.empty:
-#             outlier_report[path] = list(zip(outliers.index, outliers.values))
-            
-#     volatility_bin = (volatility_df > path_threshold).astype(int)
-    
-#     rows, cols = np.where(volatility_bin == 1)
-
-#     celltype_lst = volatility_bin.index[rows].tolist()
-#     lr_symbol_lst = volatility_bin.columns[cols].tolist()
-#     inter_score_lst = data.values[rows, cols].tolist()
-
-#     result_df = pd.DataFrame({
-#         'Path_Symbol': lr_symbol_lst,
-#         'Cell_Type': celltype_lst,
-#         'Comm_Score': inter_score_lst,
-#         'Z_Score': 2  
-#     })
-#     result_df = result_df.reset_index(drop=True)
-
-#     return result_df, volatility_df, volatility_bin, outlier_report
 
 
 def Identify_volatile_paths_celltype(data, threshold=None, method='mad'):
