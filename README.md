@@ -1,5 +1,5 @@
 
-![RegChat_Overview](https://github.com/zcaiwei/MultiChat/blob/main/MultiChat_overview.png)
+![MultiChat_Logo](https://github.com/zcaiwei/MultiChat/main/MultiChat_logo.png)
 
 ## Overview
 
