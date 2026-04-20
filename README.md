@@ -2,13 +2,13 @@
 ![MultiChat_Logo](https://github.com/zcaiwei/MultiChat/blob/main/MultiChat_logo.png)
 
 ## Overview
----
+
 
 MultiChat (Multi-omics Cell-cell communication inference via Heterogeneous graph ATtention network)  is a computational framework designed to infer CCC at single-cell resolution by integrating single-cell or spatial transcriptomics and epigenomics data.
 
 
 ## Installation
----
+
 
 The MultiChat package is developed based on the Python libraries [Scanpy](https://scanpy.readthedocs.io/en/stable/), [PyTorch](https://pytorch.org/) and [PyG](https://github.com/pyg-team/pytorch_geometric) (*PyTorch Geometric*) framework.
 
@@ -73,7 +73,7 @@ python setup.py install
 - For now, please use **Option A (PyPI installation)**.
 
 ## Input Format and Requirements
----
+
 MultiChat requires several input files to perform CCC inference. Depending on the analysis scope (e.g., ligand–receptor only vs. multi-layer signaling), some inputs are optional.
 
 ### 1. Gene Expression (RNA) File (Mandatory)
@@ -141,7 +141,7 @@ A Cell × Peak matrix (CSV or TXT). The data is **optional** and only required w
 
 
 ## Usage
----
+
 
 After the installation is complete, you can import and use `MultiChat` in your Python scripts or interactive sessions like this:
 
@@ -172,7 +172,7 @@ Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.co
 
 
 ## Tutorials
----
+
 
 To get started with MultiChat, please refer to the `Tutorial` folder for step-by-step instructions.
 - [Data Preparation Tutorial: Using single cell ISSAAC-seq multi-omics data of mouse cortex slices with MultiChat](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/data_preprocessing_on_ISSAAC.ipynb)
@@ -182,7 +182,7 @@ To get started with MultiChat, please refer to the `Tutorial` folder for step-by
 
 
 ## Support
----
+
 If you have any questions, please feel free to contact us at: 📧[zhanglh@whu.edu.cn](mailto:zhanglh@whu.edu.cn). 
 
 
