@@ -70,7 +70,7 @@ python setup.py install
 
 - Once released, **Option B will be fully functional** for users who prefer installation from source.
 
-- For now, please use **Option A (PyPI installation)**.
+- For now, please use **Option A (PyPI installation)**. The PyPI version has been tested on both **Linux and Windows environments**, and installation has been verified to work successfully. If you encounter any issues during installation or usage, please feel free to open an issue or leave a message.
 
 ## Input Format and Requirements
 
