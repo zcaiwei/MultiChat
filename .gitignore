@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Local datasets and generated outputs
+Datasets/
+
+# Python packaging/build artifacts
+build/
+dist/
+*.egg-info/
+scMultiChat.egg-info/
+MANIFEST
+
+# Sphinx build artifacts
+docs/_build/
+
+# Accidentally generated curl/header files
+Accept:
+HEAD
+Host:
+User-Agent:
+
+# OS/editor/runtime files
+.DS_Store
+.Rhistory
+.RData
