@@ -6,6 +6,8 @@
 
 MultiChat (Multi-omics Cell-cell communication inference via Heterogeneous graph ATtention network)  is a computational framework designed to infer CCC at single-cell resolution by integrating single-cell or spatial transcriptomics and epigenomics data.
 
+A concise Read the Docs tutorial is available on [this website](https://multichat.readthedocs.io/en/latest/tutorials.html) and is currently under development. The example datasets are available through [Figshare](https://doi.org/10.6084/m9.figshare.30834524) provided in the tutorial.
+
 
 ## Installation
 
