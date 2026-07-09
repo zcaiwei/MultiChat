@@ -1,12 +1,14 @@
 
-![MultiChat_Logo](https://github.com/zcaiwei/MultiChat/blob/main/MultiChat_logo.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/zcaiwei/MultiChat/main/MultiChat_logo.png" alt="MultiChat Logo" width="76">
+</p>
 
 ## Overview
 
 
-MultiChat (Multi-omics Cell-cell communication inference via Heterogeneous graph ATtention network)  is a computational framework designed to infer CCC at single-cell resolution by integrating single-cell or spatial transcriptomics and epigenomics data.
+MultiChat (Multi-omics Cell-cell communication inference via Heterogeneous graph ATtention network) is a computational framework designed to infer spatially resolved regulatory cell–cell communication at cellular resolution by integrating single-cell or spatial transcriptomics and chromatin accessibility data.
 
-A concise Read the Docs tutorial is available on [this website](https://multichat.readthedocs.io/en/latest/tutorials.html) and is currently under development. The example datasets are available through [Figshare](https://doi.org/10.6084/m9.figshare.30834524) provided in the tutorial.
+A detailed tutorial is available at [this website](https://multichat.readthedocs.io/en/latest/tutorials.html), and the example datasets are available at [Figshare](https://doi.org/10.6084/m9.figshare.30834524).
 
 
 ## Installation
@@ -14,7 +16,7 @@ A concise Read the Docs tutorial is available on [this website](https://multicha
 
 The MultiChat package is developed based on the Python libraries [Scanpy](https://scanpy.readthedocs.io/en/stable/), [PyTorch](https://pytorch.org/) and [PyG](https://github.com/pyg-team/pytorch_geometric) (*PyTorch Geometric*) framework.
 
-Follow these steps in your terminal to get ```MultiChat``` set up in your local enviroment.
+Follow the following steps in your terminal to install ```MultiChat``` in your local enviroment.
 
 
 ### 1. Set up Environment
@@ -68,50 +70,35 @@ python setup.py install
 ```
 **Note**
 
-- The source code is **currently not publicly available** and will be released in a future update.
-
-- Once released, **Option B will be fully functional** for users who prefer installation from source.
-
-- For now, please use **Option A (PyPI installation)**. The PyPI version has been tested on both **Linux and Windows environments**, and installation has been verified to work successfully. If you encounter any issues during installation or usage, please feel free to open an issue or leave a message.
+- The PyPI version has been tested on both **Linux and Windows environments**, and installation has been verified to work successfully. If you encounter any issues during installation or usage, please feel free to open an issue or leave a message.
 
 ## Input Format and Requirements
 
-MultiChat requires several input files to perform CCC inference. Depending on the analysis scope (e.g., ligand–receptor only vs. multi-layer signaling), some inputs are optional.
+MultiChat takes either single-cell multi-omics data along with spatial transcriptomics data or spatial multi-omics data as inputs.
 
-### 1. Gene Expression (RNA) File (Mandatory)
+
+### 1. Gene Expression (RNA) File 
 
 A Gene × Cell matrix (CSV or TXT). 
 
 **Note**: Gene IDs must use standard gene symbols.
 
 
-### 2. Database 
+### 2. Chromatin Accessibility (ATAC) Data (**Optional**)
 
-A file (CSV/TSV/TXT) containing known ligand–receptor (L–R) interactions or ligand-receptor-transcription factor-garget gene (L-R-TF-TG).
-
-#### 🔹 Ligand–Receptor Database (Mandatory)
-Used when focusing on **significant ligand–receptor interactions** only.
-
-- **Column 1**: `Ligand_Symbol`  
-- **Column 2**: `Receptor_Symbol`  
-- **Column 3**: `Pathway_Name`  (Optional, e.g., *EGF*) 
-
-#### 🔹  Ligand–Receptor–TF–TG  Database (Optional)
-
-Used when performing **multi-layer signaling inference**.
-
-- **Column 1**: `Ligand_Symbol`  
-- **Column 2**: `Receptor_Symbol`  
-- **Column 3**: `TF_Symbol`  
-- **Column 4**: `TG_Symbol`  
-- **Column 5**: `Pathway_Name` (Optional)
-
-We provide a curated L–R database derived from CellChatDB an CellCall. Users may also supply a custom database.
-
-**Note**: Gene symbols must strictly match those in your Gene Expression File. Any additional columns will be ignored.  
+A Cell × Peak matrix (CSV or TXT). The data is **optional** and only required when performing **multi-layer signaling inference**.
 
 
-### 3. Meta File (**Mandatory**)
+### 3. Spatial Coordinates File (Optional)
+
+A file (CSV/TXT) containing the spatial coordinates for each cell or spot.
+
+- **Index**: `cell_id` (Must strictly match the cell names in the Gene Expression File)
+- **Column 1**: `x` coordinate  
+- **Column 2**: `y` coordinate  
+
+
+### 4. Meta data File 
 
 A file describing cell annotations:
 
@@ -123,21 +110,27 @@ This file is used to define cell identities and enable cell-type-level analysis.
 
 
 
-### 4. Spatial Coordinates File (Optional)
 
-Required only for spatial CCC analysis. A file (CSV/TXT) containing the spatial coordinates for each cell or spot.
+### 5. Database (**Optional**)
 
-- **Index**: `cell_id` (Must strictly match the cell names in the Gene Expression File)
-- **Column 1**: `x` coordinate  
-- **Column 2**: `y` coordinate  
+MultiChat provides a built-in curated database. Users may also supply a custom database by providing a CSV, TSV or TXT file containing ligand–receptor (L–R) or ligand–receptor–transcription factor–target gene (L–R–TF–TG) information. The file should contain the following columns:
 
-**Note**:If spatial information is not available, the strategy for selecting positive samples needs to be adjusted accordingly.
+#### 🔹 Ligand–Receptor Database 
+Used when focusing on **significant ligand–receptor interactions** only.
 
+- **Column 1**: `Ligand_Symbol`  
+- **Column 2**: `Receptor_Symbol`  
+- **Column 3**: `Pathway_Name`  (Optional, e.g., *EGF*) 
 
-### 5. Chromatin Accessibility (ATAC) Data (**Optional**)
-A Cell × Peak matrix (CSV or TXT). The data is **optional** and only required when performing **multi-layer signaling inference**.
+#### 🔹  Ligand–Receptor–TF–TG  Database 
 
+Used when performing **multi-layer signaling inference**.
 
+- **Column 1**: `Ligand_Symbol`  
+- **Column 2**: `Receptor_Symbol`  
+- **Column 3**: `TF_Symbol`  
+- **Column 4**: `TG_Symbol`  
+- **Column 5**: `Pathway_Name` (Optional)
 
 
 
@@ -151,14 +144,19 @@ After the installation is complete, you can import and use `MultiChat` in your P
 import MultiChat as MC
 ```
 
-### 🔹 Mode 1: Ligand–Receptor Interaction Only (No scATAC-seq)
+### 🔹 Mode 1: Multi-omics Multi-layer Signaling Inference with ATAC-seq data
 
-If ATAC data is unavailable, MultiChat can still identify **significant ligand–receptor interactions**.
-
-Please refer to:  [`run_MultiChat-inter.ipynb`](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat-inter.ipynb)
+Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb), [HumanHeart dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)  ) 
 
 
-### 🔹 Mode 2: Multi-layer Signaling Inference (No scATAC-seq)
+### 🔹 Mode 2: Multi-omics Multi-layer Signaling Inference without ATAC-seq data
+
+If ATAC data is unavailable but you want to infer **multi-layer signaling** (L-R-TF-TG), MultiChat provides a simplified version.
+
+Please refer to:  [`run_MultiChat-wto-chrom_acc.ipynb`](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat-wto-chrom_acc.ipynb)
+
+
+<!-- ### 🔹 Mode 2: Multi-layer Signaling Inference (No scATAC-seq)
 
 If ATAC data is unavailable but you want to infer **extended signaling cascades** (L-R-TF-TG), MultiChat provides a simplified version.
 
@@ -169,7 +167,7 @@ Please refer to:  [`run_MultiChat-wto-chrom_acc.ipynb`](https://github.com/zcaiw
 
 When both gene expression and chromatin accessibility data are available, MultiChat performs multi-layer CCC inference.
 
-Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb), [HumanHeart dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)  ) 
+Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb), [HumanHeart dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)  )  -->
 
 
 
