@@ -1,15 +1,12 @@
 Tutorials
 =========
 
-The following tutorials are rendered from the Jupyter notebooks in the
-``Tutorial/`` directory.
-
 .. toctree::
    :maxdepth: 1
 
-   tutorials/data_preprocessing_on_ISSAAC
-   tutorials/run_MultiChat-inter
-   tutorials/run_MultiChat_on_ISSAAC
-   tutorials/run_MultiChat_on_Heart
-   tutorials/run_MultiChat_on_Simusimp
-   tutorials/run_MultiChat-wto-chrom_acc
+   Data Preparation: ISSAAC-seq mouse cortex slices <tutorials/data_preprocessing_on_ISSAAC>
+   Tutorial 1: Quick Start Guide on simulation data <tutorials/run_MultiChat_on_Simusimp>
+   Tutorial 2: ISSAAC-seq mouse cortex slices <tutorials/run_MultiChat_on_ISSAAC>
+   Tutorial 3: Human myocardial infarction <tutorials/run_MultiChat_on_Heart>
+   Tutorial 4: Ligand-Receptor Interaction Only (No scATAC-seq) <tutorials/run_MultiChat-inter>
+   Tutorial 5: Multi-layer Signaling Inference (No scATAC-seq) <tutorials/run_MultiChat-wto-chrom_acc>
