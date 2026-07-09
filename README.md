@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/zcaiwei/MultiChat/main/MultiChat_logo.png" alt="MultiChat Logo" width="76">
+  <img src="https://raw.githubusercontent.com/zcaiwei/MultiChat/main/MultiChat_logo.png" alt="MultiChat Logo" width="160">
 </p>
 
 ## Overview
