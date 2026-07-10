@@ -179,4 +179,3 @@ To get started with MultiChat, please refer to the `Tutorial` folder for step-by
 ## Support
 
 If you have any questions, please feel free to contact us at: 📧[zhanglh@whu.edu.cn](mailto:zhanglh@whu.edu.cn). 
-
