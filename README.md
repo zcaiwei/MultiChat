@@ -156,18 +156,12 @@ If ATAC data is unavailable but you want to infer **multi-layer signaling** (L-R
 Please refer to:  [`run_MultiChat-wto-chrom_acc.ipynb`](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat-wto-chrom_acc.ipynb)
 
 
-<!-- ### 🔹 Mode 2: Multi-layer Signaling Inference (No scATAC-seq)
+### 🔹 Mode 3: Ligand-Receptor Interaction Inference without ATAC-seq data
 
-If ATAC data is unavailable but you want to infer **extended signaling cascades** (L-R-TF-TG), MultiChat provides a simplified version.
+If ATAC-seq data are unavailable and you only want to infer significant **intercellular ligand-receptor (L-R)** interactions, MultiChat provides a simplified workflow.
 
-Please refer to:  [`run_MultiChat-wto-chrom_acc.ipynb`](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat-wto-chrom_acc.ipynb)
+Please refer to:  [`run_MultiChat_for_ligand-receptor_identification.ipynb`](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_for_ligand-receptor_identification.ipynb)
 
-
-### 🔹 Mode 3: Multi-omics Multi-layer Signaling Inference (Recommended)
-
-When both gene expression and chromatin accessibility data are available, MultiChat performs multi-layer CCC inference.
-
-Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb), [HumanHeart dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)  )  -->
 
 
 
@@ -176,13 +170,14 @@ Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.co
 
 To get started with MultiChat, please refer to the `Tutorial` folder for step-by-step instructions.
 - [Data Preparation Tutorial: Using single cell ISSAAC-seq multi-omics data of mouse cortex slices with MultiChat](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/data_preprocessing_on_ISSAAC.ipynb)
-- [Tutorial 1: Quick Start Guide, running MultiChat on simulation data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Simusimp.ipynb)
-- [Tutorial 2: Running MultiChat on single cell ISSAAC-seq multi-omics data of mouse cortex slices](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb)
-- [Tutorial 3: Running MultiChat on single cell multi-omics data of human myocardial infarction](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)
+- [Tutorial 1: Quick Start Guide – Running MultiChat on Simulated Data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Simusimp.ipynb)
+- [Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb)
+- [Tutorial 3:  Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)
+- [Tutorial 4:  Running MultiChat on spatial multi-omics data]
+(https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_P22.ipynb)
 
 
 ## Support
 
 If you have any questions, please feel free to contact us at: 📧[zhanglh@whu.edu.cn](mailto:zhanglh@whu.edu.cn). 
-
 
