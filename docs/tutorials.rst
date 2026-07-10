@@ -9,5 +9,5 @@ Tutorials
    Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_ISSAAC>
    Tutorial 3: Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_Heart>
    Tutorial 4: Running MultiChat on spatial multi-omics data <tutorials/run_MultiChat_on_P22>
-   Mode 2: Multi-layer Signaling Inference without ATAC-seq data <tutorials/run_MultiChat-wto-chrom_acc>
+   Mode 2: Multi-omics Multi-layer Signaling Inference without ATAC-seq data <tutorials/run_MultiChat-wto-chrom_acc>
    Mode 3: Ligand-Receptor Interaction Inference without ATAC-seq data <tutorials/run_MultiChat_for_ligand-receptor_identification>
