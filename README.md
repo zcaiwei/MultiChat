@@ -170,7 +170,7 @@ Please refer to:  [`run_MultiChat_for_ligand-receptor_identification.ipynb`](htt
 
 To get started with MultiChat, please refer to the `Tutorial` folder for step-by-step instructions.
 - [Data Preparation Tutorial: Using single cell ISSAAC-seq multi-omics data of mouse cortex slices with MultiChat](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/data_preprocessing_on_ISSAAC.ipynb)
-- [Tutorial 1: Quick Start Guide – Running MultiChat on Simulated Data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Simusimp.ipynb)
+- [Tutorial 1: Quick Start Guide – Running MultiChat on Simulated Data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Simulation.ipynb)
 - [Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb)
 - [Tutorial 3:  Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)
 - [Tutorial 4:  Running MultiChat on spatial multi-omics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_P22.ipynb)
