@@ -530,6 +530,140 @@ def calculate_r_tf_tg_reg(
     return cell_results, combined_sparse
 
 
+def run_r_tf_tg_intra_strength_pipeline(
+    base_path,
+    rna_mat_minmax,
+    atac_mat_minmax,
+    tg_re_df,
+    tf_rep,
+    peak_rep,
+    tf_re_ba,
+    gene_rep,
+    cell_rep_aligned,
+    L_R_TF_TG_df
+):
+    """
+    Run intracellular R-TF-TG strength pipeline.
+
+    This function calculates:
+    1. TF-TG scores
+    2. Receptor-TF PCC scores
+    3. R-TF-TG regulation scores
+    4. R-TF-TG correlation scores
+    5. Final R-TF-TG strength
+    """
+
+    print("[INFO] Step 1/5: Calculating TF-TG scores...")
+    path_outs = base_path + 'CCC/TF_TG/'
+
+    tf_tg_scores = calculate_all_tf_tg_scores(
+        rna_mat=rna_mat_minmax,
+        atac_mat=atac_mat_minmax,
+        tg_re_df=tg_re_df,
+        tf_rep=tf_rep,
+        peak_rep=peak_rep,
+        tf_re_ba=tf_re_ba,
+        gene_rep=gene_rep,
+        path=path_outs
+    )
+
+    print(f"[INFO] TF-TG scores calculated. Shape: {tf_tg_scores.shape}")
+
+    print("[INFO] Step 2/5: Filtering non-zero TF-TG scores...")
+    tf_tg_scores_df = tf_tg_scores.loc[:, (tf_tg_scores != 0).any()]
+    print(f"[INFO] Non-zero TF-TG score matrix shape: {tf_tg_scores_df.shape}")
+
+    print("[INFO] Step 3/5: Calculating Receptor-TF PCC scores...")
+    l_r_tf_df = L_R_TF_TG_df[
+        ['Ligand_Symbol', 'Receptor_Symbol', 'TF_Symbol']
+    ].drop_duplicates()
+
+    rec_tf_df = l_r_tf_df[
+        ['Receptor_Symbol', 'TF_Symbol']
+    ].drop_duplicates().reset_index(drop=True)
+
+    rec_tf_pcc = rec_tf_df.copy()
+
+    tqdm.pandas(desc="Calculating Receptor-TF PCC")
+    rec_tf_pcc['scores'] = rec_tf_pcc.progress_apply(
+        lambda row: calculate_pcc_rec_tf(
+            gene_rep,
+            tf_rep,
+            row['Receptor_Symbol'],
+            row['TF_Symbol']
+        ),
+        axis=1
+    )
+
+    rec_tf_pcc = rec_tf_pcc.fillna(0)
+
+    rec_tf_pcc_path = base_path + 'CCC/Receptor_TF_PCC.csv'
+    rec_tf_pcc.to_csv(rec_tf_pcc_path, index=False)
+
+    print(f"[INFO] Receptor-TF PCC saved to: {rec_tf_pcc_path}")
+    print(f"[INFO] Receptor-TF PCC shape: {rec_tf_pcc.shape}")
+
+    print("[INFO] Step 4/5: Calculating R-TF-TG regulation scores...")
+    cell_results_reg, combined_results_reg = calculate_r_tf_tg_reg(
+        cell_rep=cell_rep_aligned,
+        tf_tg_score_df=tf_tg_scores_df,
+        rec_tf_pcc=rec_tf_pcc,
+        rna_mat=rna_mat_minmax,
+        output_dir=base_path + "CCC/R_TF_TG_Reg"
+    )
+
+    print("[INFO] R-TF-TG regulation scores calculated.")
+
+    print("[INFO] Loading global row and column names from R_TF_TG_Reg...")
+    with open(base_path + 'CCC/R_TF_TG_Reg/global_row_names.json', 'r') as f:
+        global_row_names = json.load(f)
+
+    with open(base_path + 'CCC/R_TF_TG_Reg/global_col_names.json', 'r') as f:
+        global_col_names = json.load(f)
+
+    print(f"[INFO] Number of receptors: {len(global_row_names)}")
+    print(f"[INFO] Number of TF-TG pairs: {len(global_col_names)}")
+
+    print("[INFO] Step 5/5: Calculating R-TF-TG correlation scores...")
+    cell_results_cor, combined_cor = calculate_r_tf_tg_cor(
+        gene_rep=gene_rep,
+        tf_rep=tf_rep,
+        cell_rep=cell_rep_aligned,
+        receptors=global_row_names,
+        tf_tg_pairs=global_col_names,
+        reg_dir=base_path + "CCC/R_TF_TG_Reg",
+        output_dir=base_path + "CCC/R_TF_TG_Cor"
+    )
+
+    print("[INFO] R-TF-TG correlation scores calculated.")
+
+    print("[INFO] Combining regulation and correlation scores into final R-TF-TG strength...")
+    cor_dir = base_path + "CCC/R_TF_TG_Cor"
+    reg_dir = base_path + "CCC/R_TF_TG_Reg"
+
+    cell_results_tol, combined_tol = calculate_r_tf_tg_strength(
+        cell_rep=cell_rep_aligned,
+        cor_dir=cor_dir,
+        reg_dir=reg_dir,
+        output_dir=base_path + "CCC/R_TF_TG"
+    )
+
+    print("[INFO] R-TF-TG strength calculation completed.")
+    print(f"[INFO] Final R-TF-TG results saved to: {base_path + 'CCC/R_TF_TG'}")
+
+    return {
+        "tf_tg_scores": tf_tg_scores,
+        "tf_tg_scores_df": tf_tg_scores_df,
+        "rec_tf_pcc": rec_tf_pcc,
+        "cell_results_reg": cell_results_reg,
+        "combined_results_reg": combined_results_reg,
+        "cell_results_cor": cell_results_cor,
+        "combined_cor": combined_cor,
+        "cell_results_tol": cell_results_tol,
+        "combined_tol": combined_tol,
+    }
+
+
 
 def calculate_l_r_tf_tg_strength(
     l_r_tf_tg_df: pd.DataFrame,
