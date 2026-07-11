@@ -1229,15 +1229,15 @@ def Identify_significant_lr_pairs_celltype(sif_df, celltype, agg_method='mean'):
     )
     
     if isinstance(agg_method, dict):
-        result_df = merged_df.groupby(['LR_Symbol', 'celltype']).agg(agg_method)
+        result_df = merged_df.groupby(['LR_Symbol', 'cell_type']).agg(agg_method)
     else:
-        result_df = merged_df.groupby(['LR_Symbol', 'celltype']).agg({
+        result_df = merged_df.groupby(['LR_Symbol', 'cell_type']).agg({
             'Inter_Score': agg_method,
             'Z_Score': agg_method
         })
     
     result_df = result_df.reset_index()
-    result_df.rename(columns={'celltype': 'Cell_Type'}, inplace=True)
+    result_df.rename(columns={'cell_type': 'Cell_Type'}, inplace=True)
     
     return result_df
 
@@ -1255,15 +1255,15 @@ def Identify_significant_paths_celltype(sif_df, celltype, agg_method='mean'):
     )
     
     if isinstance(agg_method, dict):
-        result_df = merged_df.groupby(['Path_Symbol', 'celltype']).agg(agg_method)
+        result_df = merged_df.groupby(['Path_Symbol', 'cell_type']).agg(agg_method)
     else:
-        result_df = merged_df.groupby(['Path_Symbol', 'celltype']).agg({
+        result_df = merged_df.groupby(['Path_Symbol', 'cell_type']).agg({
             'Comm_Score': agg_method,
             'Z_Score': agg_method
         })
     
     result_df = result_df.reset_index()
-    result_df.rename(columns={'celltype': 'Cell_Type'}, inplace=True)
+    result_df.rename(columns={'cell_type': 'Cell_Type'}, inplace=True)
     
     return result_df
 
@@ -1419,13 +1419,53 @@ def calculate_l_r_tf_tg_strength_cellwise(
     
 
 
+def generate_neighbor_ligand_expression_matrix(base_path, cell_names=None, repeat_times=1):
+    print("[INFO] Generating background expression data")
+
+    nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', index_col=None, header=None, sep="\t")
+    rna_mat = pd.read_csv(base_path + 'CCC/expression_smooth.txt', header=0, index_col=0, sep="\t")
+
+    result_mat = pd.DataFrame(index=rna_mat.index, columns=rna_mat.columns, dtype=float)
+
+    for i, row in tqdm(nei_adj.iterrows(), desc="Processing rows", total=nei_adj.shape[0]):
+        cell_name = rna_mat.columns[i]
+        sender_idxs = row[1:].dropna().astype(int)
+
+        if len(sender_idxs) == 0:
+            result_mat[cell_name] = 0
+        else:
+            sender_idxs = sender_idxs - 1
+            sender_expr = rna_mat.iloc[:, sender_idxs]
+            mean_expr = sender_expr.mean(axis=1)
+            result_mat[cell_name] = mean_expr.values
+
+    result_mat_minmax = (result_mat - result_mat.min()) / (
+        result_mat.max() - result_mat.min()
+    )
+
+    result_mat_minmax = result_mat_minmax.fillna(0)
+
+    if repeat_times > 1:
+        result_mat_minmax = pd.concat(
+            [result_mat_minmax] * repeat_times,
+            axis=1
+        )
+
+    if cell_names is not None:
+        result_mat_minmax = result_mat_minmax[cell_names]
+
+    print(f"[INFO] Background expression matrix shape: {result_mat_minmax.shape}")
+
+    return result_mat_minmax
+
+
 def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
     ccc_lrp_path: str,
-    expression_matrix: pd.DataFrame,  
+    base_path: str,
     output_dir: str = None,
     output_file: str = "cellwise_cascade_results.csv"
 ) -> None:
@@ -1440,7 +1480,12 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
         ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
-        expression_matrix = expression_matrix[cell_names]
+        expression_matrix = generate_neighbor_ligand_expression_matrix(
+            base_path=base_path,
+            cell_names=cell_names,
+            repeat_times=1
+        )
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
@@ -1617,7 +1662,7 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
     global_row_names_path: str,
     global_col_names_path: str,
     ccc_lrp_path: str,
-    expression_matrix: pd.DataFrame,
+    base_path: str,
     output_dir: str = None,
     output_file: str = "background_cellwise_cascade_results.csv",
     random_seed: int = 42
@@ -1633,7 +1678,7 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
         ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
-        expression_matrix = expression_matrix[cell_names]
+        
     except Exception as e:
         print(f"Error loading data: {e}")
         return
@@ -1641,7 +1686,13 @@ def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
     
     final_cell_names = cell_names * 10
     print("Final cell names length:", len(final_cell_names))
-    
+
+    expression_matrix = generate_neighbor_ligand_expression_matrix(
+        base_path=base_path,
+        cell_names=cell_names,
+        repeat_times=10
+    )
+
     print("Generating background data by row permutation...")
     np.random.seed(random_seed) 
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
@@ -1859,24 +1910,26 @@ def sig_LR_with_source_target(base_path,db,cell_type):
         'to_cell': to_lst,
         'source': source_lst,
         'target': target_lst,
-        'path_symbol': path_lst,
+        'lr_symbol': path_lst,
         'comm_score': comm_score_lst,
         'z_score': z_score_lst
     })
     results_df.to_csv(os.path.join(base_path, f'CCC/Significant_LRs_res.csv'), index=False)
     print(f"Saved results for Significant_LRs to {os.path.join(base_path, f'CCC/Significant_LRs_res.csv')}, shape: {results_df.shape}")
+
+    return results_df
     
     
-def Identify_significant_lr_pairs_celltypes(sif_df, agg_method='mean', min_cells_count=10):
+def Identify_significant_lr_pairs_celltypes(base_path, sif_df, agg_method='mean', min_cells_count=10):
     if not isinstance(sif_df, pd.DataFrame):
         raise ValueError("input needs to be pandas DataFrame")
     
-    required_cols = ['path_symbol', 'source', 'target', 'comm_score', 'z_score']
+    required_cols = ['lr_symbol', 'source', 'target', 'comm_score', 'z_score']
     missing = set(required_cols) - set(sif_df.columns)
     if missing:
         raise ValueError(f"sif_df is missing required columns: {missing}")
     
-    group_cols = ['path_symbol', 'source', 'target']
+    group_cols = ['lr_symbol', 'source', 'target']
     count_df = sif_df.groupby(group_cols).size().reset_index(name='cells_count')
     valid_groups = count_df[count_df['cells_count'] >= min_cells_count]
     
@@ -1891,11 +1944,15 @@ def Identify_significant_lr_pairs_celltypes(sif_df, agg_method='mean', min_cells
         'z_score': agg_method
     }).reset_index())
     
-    result_df = result_df.rename(columns={'path_symbol': 'LR_Symbol',
+    result_df = result_df.rename(columns={'lr_symbol': 'LR_Symbol',
                                           'source': 'Source_Type',
                                           'target': 'Target_Type',
                                           'comm_score': 'Comm_Score',
                                           'z_score': 'Z_Score'})
+
+    result_df.to_csv(base_path + f'CCC/Significant_LRs_res_celltype.csv', index=False)
+    print(f"Saved results for Significant_LRs_res_celltype to {base_path + f'CCC/Significant_LRs_res_celltype.csv'}, shape: {result_df.shape}")
+
     return result_df
 
 
@@ -1908,8 +1965,7 @@ def sig_path_with_source_target(base_path,db, cell_type):
     from_lst = []
     source_lst = []
     target_lst = []
-    
-    cell_type = pd.read_csv('/home/nas2/biod/zhencaiwei/RegChatz_V2/Datasets/ISSAAC/inputs/celltype_info.csv', index_col=0, sep="\t")     
+        
     cell_type.rename(columns={'celltype': 'cell_type'}, inplace=True)     
     Nei_adj = pd.read_csv(f'{base_path}CCC/Nei_adj.csv', index_col=None, header=None, sep='\t')
     
@@ -1945,6 +2001,8 @@ def sig_path_with_source_target(base_path,db, cell_type):
     })
     results_df.to_csv(os.path.join(base_path, f'CCC/Significant_paths_res.csv'), index=False)     
     print(f"Saved results for Significant_paths to {os.path.join(base_path, f'CCC/Significant_paths_res.csv')}, shape: {results_df.shape}")
+
+    return results_df
 
 
 

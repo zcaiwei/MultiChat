@@ -9,6 +9,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from itertools import product
 from scipy import stats
+import os
 
 
 
@@ -409,7 +410,7 @@ def plot_communication_double_panel(
     
 def run_plot_communication_double_panel(
     path_name,
-    Nei_adj,
+    base_path,
     cell_clus,
     cell_loc,
     meta_df,
@@ -428,8 +429,8 @@ def run_plot_communication_double_panel(
     ----------
     path_name : str
         Multi-layer path (e.g., 'geneA->geneB->geneC->geneD')
-    Nei_adj : pd.DataFrame
-        Neighbor adjacency matrix
+    base_path : str
+        Path to the base directory containing CCC data
     cell_clus : pd.DataFrame
         Cell type annotation
     cell_loc : pd.DataFrame
@@ -445,6 +446,12 @@ def run_plot_communication_double_panel(
     figpath : str or None
         Output path (None = do not save)
     """
+
+    nei_adj_path = base_path + 'CCC/Nei_adj.csv'
+    if not os.path.exists(nei_adj_path):
+        raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")
+    print(f"[INFO] Loading Nei_adj from: {nei_adj_path}")
+    Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
 
     # ===== Step 1: adjacency =====
     adj = get_sender_adj(Nei_adj, cell_clus)

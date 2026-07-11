@@ -22,16 +22,15 @@ def Preprocess_CCC_model(base_path, lr_database, cell_rep, expmatrix):
     '''
     smooth the expression matrix using KNN smoothing and normalize the expression of ligands and receptors.
     '''
+    ccc_path = os.path.join(base_path, "CCC")
+    os.makedirs(ccc_path, exist_ok=True)
+    print(f"[INFO] Directory for ligand and receptor expression files: {ccc_path}")
+
     latent_fea = cell_rep
     mat = expmatrix.to_numpy()
     mat_smooth = knn_smoothing(mat, k=3, latent_matrix=latent_fea)
     expmatrix_smooth = pd.DataFrame(mat_smooth, index=expmatrix.index, columns=expmatrix.columns)
-    expmatrix_smooth.to_csv(os.path.join(base_path, "CCC/expression_smooth.txt"), sep="\t", index=True, header=True)
-
-    # adata = sc.AnnData(mat_smooth)
-    # sc.pp.scale(adata, zero_center=True, max_value=10) 
-    # data = adata.X 
-    # mat_it = np.sum(data > 0, axis=1) 
+    expmatrix_smooth.to_csv(os.path.join(ccc_path, "expression_smooth.txt"), sep="\t", index=True, header=True)
 
     LR_ls = lr_database.apply(lambda row: f"{row['Ligand_Symbol']}->{row['Receptor_Symbol']}", axis=1).tolist()
     ligand_exps = []
@@ -56,8 +55,8 @@ def Preprocess_CCC_model(base_path, lr_database, cell_rep, expmatrix):
     ligand_exps_n = (ligand_exps - ligand_exps.min(axis=1).values[:, None]) / (ligand_exps.max(axis=1).values[:, None] - ligand_exps.min(axis=1).values[:, None]) 
     receptor_exps_n = (receptor_exps - receptor_exps.min(axis=1).values[:, None]) / (receptor_exps.max(axis=1).values[:, None] - receptor_exps.min(axis=1).values[:, None])
 
-    pd.DataFrame(ligand_exps_n.T).to_csv(os.path.join(base_path, "CCC/ligands_expression.txt"), sep="\t", index=True, header=True)
-    pd.DataFrame(receptor_exps_n.T).to_csv(os.path.join(base_path, "CCC/receptors_expression.txt"), sep="\t", index=True, header=True)
+    pd.DataFrame(ligand_exps_n.T).to_csv(os.path.join(ccc_path, "ligands_expression.txt"), sep="\t", index=True, header=True)
+    pd.DataFrame(receptor_exps_n.T).to_csv(os.path.join(ccc_path, "receptors_expression.txt"), sep="\t", index=True, header=True)
     
     return ligand_exps_n.T, receptor_exps_n.T
 
