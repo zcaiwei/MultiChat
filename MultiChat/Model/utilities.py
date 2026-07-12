@@ -75,6 +75,7 @@ def load_ccc_data(args):
     
     print("loading cell type annotations")
     cell_type_df = pd.read_csv(args.annoFile, header=0, index_col=0, sep="\t")
+    cell_type_df.rename(columns={'celltype': 'cell_type'}, inplace=True)
     
     print("Calculating pairwise distances between spots")
     dist_loc = pairwise_distances(spot_loc.values, metric=args.locMeasure)

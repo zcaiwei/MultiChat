@@ -86,12 +86,11 @@ def calculate_tf_re_tg(tf_name, tg_name, sample_rna, sample_atac, tg_re_df, tf_r
     return total_score
 
 
-def calculate_all_tf_tg_scores(rna_mat, atac_mat, tg_re_df, tf_rep, peak_rep, tf_re_ba, gene_rep, path, cell_rep=None):
+def calculate_all_tf_tg_scores(rna_mat, atac_mat, tg_re_df, tf_rep, peak_rep, tf_re_ba, gene_rep):
     """
     Get and save all samples TF-TG score
     """
     
-    os.makedirs(path, exist_ok=True)
     samples = rna_mat.columns
     tfs = tf_rep.index
     tgs = tg_re_df['genes'].unique()
@@ -133,11 +132,8 @@ def calculate_all_tf_tg_scores(rna_mat, atac_mat, tg_re_df, tf_rep, peak_rep, tf
                     tf_rep, peak_rep, tf_re_ba, gene_rep
                 )
         
-        sample_results.to_csv(os.path.join(path, f"{sample}.csv"))
-        
         final_results.loc[sample] = sample_results.values.ravel()
     
-    final_results.to_csv(os.path.join(path, "all_samples_tf_tg_scores.csv"))
     return final_results
 
 
@@ -271,38 +267,26 @@ def calculate_r_tf_tg_cor(
     cell_rep: pd.DataFrame,
     receptors: List[str],
     tf_tg_pairs: List[str],
-    reg_dir: str = "R_TF_TG_Reg",  
-    output_dir: str = "output_cells_cor",
+    reg_cell_results: Dict[str, csr_matrix],
     align_method: str = "pca",
     target_dim: int = 50
 ) -> Tuple[Dict[str, csr_matrix], csr_matrix]:
     """
-     Get correlation score with automatic feature alignment.
-     
-     If feature dimensions of cell/gene/tf representations do not match,     
-     the function will automatically align them using PCA or truncation.
+    Get R-TF-TG correlation score in memory.
+
+    No R_TF_TG_Cor files will be written.
     """
-    os.makedirs(output_dir, exist_ok=True)
-    
-    with open(f"{output_dir}/global_row_names.json", "w") as f:
-        json.dump(receptors, f)
-    with open(f"{output_dir}/global_col_names.json", "w") as f:
-        json.dump(tf_tg_pairs, f)
-    
+
     cells = cell_rep.index.tolist()
-    
+
     gene_index = {gene: idx for idx, gene in enumerate(gene_rep.index)}
     tf_index = {tf: idx for idx, tf in enumerate(tf_rep.index)}
-    
+
     parsed_pairs = []
     for pair in tf_tg_pairs:
         tf, tg = pair.split("->")
         parsed_pairs.append((tf, tg, gene_index.get(tg, -1)))
-    
-    # print("Precomputing PCC matrices...")
-    # cell_gene_pcc_matrix = 1 - cdist(cell_rep.values, gene_rep.values, metric='correlation')
-    # cell_tf_pcc_matrix = 1 - cdist(cell_rep.values, tf_rep.values, metric='correlation')
-    
+
     cell_arr = cell_rep.values
     gene_arr = gene_rep.values
     tf_arr = tf_rep.values
@@ -311,16 +295,16 @@ def calculate_r_tf_tg_cor(
     d_gene = gene_arr.shape[1]
     d_tf = tf_arr.shape[1]
 
-    print(f"[Info] Original dimensions: cell={d_cell}, gene={d_gene}, tf={d_tf}")
+    print(f"Original dimensions: cell={d_cell}, gene={d_gene}, tf={d_tf}")
 
     if not (d_cell == d_gene == d_tf):
-        print("[Info] Feature dimensions are inconsistent!")
-        
+        print("Feature dimensions are inconsistent!")
+
         if align_method == "pca":
             from sklearn.decomposition import PCA
 
             new_dim = min(target_dim, d_cell, d_gene, d_tf)
-            print(f"[Info] Applying PCA to align all representations to {new_dim} dimensions.")
+            print(f"Applying PCA to align all representations to {new_dim} dimensions.")
 
             pca = PCA(n_components=new_dim)
 
@@ -330,7 +314,7 @@ def calculate_r_tf_tg_cor(
 
         elif align_method == "truncate":
             new_dim = min(d_cell, d_gene, d_tf)
-            print(f"[Info] Truncating all representations to {new_dim} dimensions.")
+            print(f"Truncating all representations to {new_dim} dimensions.")
 
             cell_arr = cell_arr[:, :new_dim]
             gene_arr = gene_arr[:, :new_dim]
@@ -338,119 +322,123 @@ def calculate_r_tf_tg_cor(
 
         else:
             raise ValueError("align_method must be 'pca' or 'truncate'")
-
     else:
-        print("[Info] Feature dimensions are already aligned. No processing needed.")
+        print("Feature dimensions are already aligned. No processing needed.")
 
-    print(f"[Info] Final aligned dimension: {cell_arr.shape[1]}")
+    print(f"Final aligned dimension: {cell_arr.shape[1]}")
 
-    # ===============================
-    # PCC computation
-    # ===============================
     print("Precomputing PCC matrices...")
     cell_gene_pcc_matrix = 1 - cdist(cell_arr, gene_arr, metric='correlation')
     cell_tf_pcc_matrix = 1 - cdist(cell_arr, tf_arr, metric='correlation')
-    
-    cell_gene_pcc_matrix = np.abs(cell_gene_pcc_matrix)  
-    cell_tf_pcc_matrix = np.abs(cell_tf_pcc_matrix)      
-    
+
+    cell_gene_pcc_matrix = np.abs(cell_gene_pcc_matrix)
+    cell_tf_pcc_matrix = np.abs(cell_tf_pcc_matrix)
+
     cell_results = {}
-    combined_data = np.zeros((len(cells), len(receptors)*len(tf_tg_pairs)))
-    
-    for cell_idx, cell in enumerate(tqdm(cells, desc="Processing cells")):
-        reg_path = f"{reg_dir}/{cell}.npz"
-        if not os.path.exists(reg_path):
+    combined_rows = []
+
+    for cell_idx, cell in enumerate(tqdm(cells, desc="Processing R-TF-TG correlation scores")):
+        if cell not in reg_cell_results:
             continue
-            
-        reg_sparse = load_npz(reg_path)
-        reg_coo = reg_sparse.tocoo() 
-        
+
+        reg_sparse = reg_cell_results[cell]
+        reg_coo = reg_sparse.tocoo()
+
         cell_data = np.zeros((len(receptors), len(tf_tg_pairs)))
-        
+
         for rec_idx, pair_idx, reg_val in zip(reg_coo.row, reg_coo.col, reg_coo.data):
             receptor = receptors[rec_idx]
             tf, tg, tg_idx = parsed_pairs[pair_idx]
-            
+
             if '_' in receptor:
                 items = receptor.split('_')
                 item_pccs = []
+
                 for item in items:
                     if item in gene_index:
                         item_pccs.append(cell_gene_pcc_matrix[cell_idx, gene_index[item]])
+
                 rec_pcc = np.mean(item_pccs) if item_pccs else 0
             else:
-                rec_pcc = cell_gene_pcc_matrix[cell_idx, gene_index[receptor]] if receptor in gene_index else 0
-            
-            tf_pcc = cell_tf_pcc_matrix[cell_idx, tf_index[tf]] if tf in tf_index else 0
-            tg_pcc = cell_gene_pcc_matrix[cell_idx, tg_idx] if tg_idx != -1 else 0
-            
+                rec_pcc = (
+                    cell_gene_pcc_matrix[cell_idx, gene_index[receptor]]
+                    if receptor in gene_index
+                    else 0
+                )
+
+            tf_pcc = (
+                cell_tf_pcc_matrix[cell_idx, tf_index[tf]]
+                if tf in tf_index
+                else 0
+            )
+
+            tg_pcc = (
+                cell_gene_pcc_matrix[cell_idx, tg_idx]
+                if tg_idx != -1
+                else 0
+            )
+
             cell_data[rec_idx, pair_idx] = rec_pcc * tf_pcc * tg_pcc
-        
+
         cell_sparse = csr_matrix(cell_data)
         cell_results[cell] = cell_sparse
-        save_npz(f"{output_dir}/{cell}.npz", cell_sparse)
-        
-        combined_data[cell_idx, :] = cell_data.ravel()
-    
-    combined_sparse = csr_matrix(combined_data)
-    save_npz(f"{output_dir}/combined_results.npz", combined_sparse)
-    
-    with open(f"{output_dir}/combined_row_names.json", "w") as f:
-        json.dump(cells, f)
-    with open(f"{output_dir}/combined_col_names.json", "w") as f:
-        json.dump([f"{rec}->{pair}" for rec in receptors for pair in tf_tg_pairs], f)
-    
+        combined_rows.append(cell_sparse.reshape(1, -1))
+
+    combined_sparse = vstack(combined_rows)
+
     return cell_results, combined_sparse
 
 
 def calculate_r_tf_tg_strength(
-    cell_rep: pd.DataFrame,
-    cor_dir: str,
-    reg_dir: str,
-    output_dir: str = "output_cells_total"
-) -> Tuple[Dict[str, csr_matrix], csr_matrix]:
+    cell_rep,
+    cor_cell_results,
+    reg_cell_results,
+    receptors,
+    tf_tg_pairs,
+    output_dir
+):
     """
-    Both correlation and regulation score
+    Combine regulation and correlation scores in memory.
+
+    Only save final combined R-TF-TG matrix and metadata.
+    No per-cell npz files are saved.
     """
+
     os.makedirs(output_dir, exist_ok=True)
-    
-    with open(f"{cor_dir}/global_row_names.json", "r") as f:
-        receptors = json.load(f)
-    with open(f"{cor_dir}/global_col_names.json", "r") as f:
-        tf_tg_pairs = json.load(f)
-    
-    with open(f"{output_dir}/global_row_names.json", "w") as f:
-        json.dump(receptors, f)
-    with open(f"{output_dir}/global_col_names.json", "w") as f:
-        json.dump(tf_tg_pairs, f)
-    
+
     cells = cell_rep.index.tolist()
-    
+
     cell_results = {}
-    combined_data = []
-    
-    for cell in tqdm(cells, desc="Calculating total scores"):
-        cor_path = f"{cor_dir}/{cell}.npz"
-        cor_mat = load_npz(cor_path)
-        
-        reg_path = f"{reg_dir}/{cell}.npz"
-        reg_mat = load_npz(reg_path)
-        
+    combined_rows = []
+    valid_cells = []
+
+    for cell in tqdm(cells, desc="Calculating final R-TF-TG strength"):
+        if cell not in cor_cell_results or cell not in reg_cell_results:
+            continue
+
+        cor_mat = cor_cell_results[cell]
+        reg_mat = reg_cell_results[cell]
+
         total_mat = cor_mat.multiply(reg_mat)
         cell_results[cell] = total_mat
-        
-        save_npz(f"{output_dir}/{cell}.npz", total_mat)
-        
-        combined_data.append(total_mat.toarray().ravel())
-    
-    combined_sparse = csr_matrix(np.vstack(combined_data))
+
+        combined_rows.append(total_mat.reshape(1, -1))
+        valid_cells.append(cell)
+
+    combined_sparse = vstack(combined_rows)
+
     save_npz(f"{output_dir}/combined_results.npz", combined_sparse)
-    
+
     with open(f"{output_dir}/combined_row_names.json", "w") as f:
-        json.dump(cells, f)
+        json.dump(valid_cells, f)
+
     with open(f"{output_dir}/combined_col_names.json", "w") as f:
         json.dump([f"{rec}->{pair}" for rec in receptors for pair in tf_tg_pairs], f)
-    
+
+    print(f"Generated R-TF-TG combined matrix saved to: {output_dir}/combined_results.npz")
+    print(f"Row names saved to: {output_dir}/combined_row_names.json")
+    print(f"Column names saved to: {output_dir}/combined_col_names.json")
+
     return cell_results, combined_sparse
 
 
@@ -459,75 +447,71 @@ def calculate_r_tf_tg_reg(
     cell_rep: pd.DataFrame,
     tf_tg_score_df: pd.DataFrame,
     rec_tf_pcc: pd.DataFrame,
-    rna_mat: pd.DataFrame,
-    output_dir: str = "output_cells"
+    rna_mat: pd.DataFrame
 ) -> Tuple[Dict[str, csr_matrix], csr_matrix]:
     """
     Get receptor-tf-tg regulation score for each cell, save as sparse format
     """
+
     assert tf_tg_score_df.index.isin(cell_rep.index).all(), "Cell names mismatch"
-    assert {"Receptor_Symbol", "TF_Symbol"}.issubset(rec_tf_pcc.columns), "rec_tf_pcc Missing necessary columns"
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
+    assert {"Receptor_Symbol", "TF_Symbol"}.issubset(rec_tf_pcc.columns), "rec_tf_pcc missing necessary columns"
+
     def get_receptor_expression(receptor: str, cell: str) -> float:
-        """receptor expression"""
         if '_' in receptor:
             parts = receptor.split('_')
             exprs = [rna_mat.loc[p, cell] if p in rna_mat.index else 0 for p in parts]
             return np.mean(exprs)
         return rna_mat.loc[receptor, cell] if receptor in rna_mat.index else 0
-    
+
     rec_tf_map = rec_tf_pcc.groupby("Receptor_Symbol")["TF_Symbol"].agg(set).to_dict()
+
     tf_to_pairs = defaultdict(list)
     for pair in tf_tg_score_df.columns:
         tf = pair.split("->")[0]
         tf_to_pairs[tf].append(pair)
+
     pcc_map = rec_tf_pcc.set_index(["Receptor_Symbol", "TF_Symbol"])["scores"].to_dict()
-    
+
     all_receptors = list(rec_tf_map.keys())
     all_tf_tg_pairs = tf_tg_score_df.columns.tolist()
     cells = tf_tg_score_df.index.tolist()
-    
-    with open(f"{output_dir}/global_row_names.json", "w") as f:
-        json.dump(all_receptors, f)
-    with open(f"{output_dir}/global_col_names.json", "w") as f:
-        json.dump(all_tf_tg_pairs, f)
-    
+
     cell_results = {}
-    combined_data = np.zeros((len(cells), len(all_receptors)*len(all_tf_tg_pairs)))
-    
-    for i, cell in enumerate(tqdm(cells, desc="Processing cells")):
+    combined_rows = []
+
+    for cell in tqdm(cells, desc="Processing R-TF-TG regulation scores"):
         cell_scores = tf_tg_score_df.loc[cell]
         cell_data = np.zeros((len(all_receptors), len(all_tf_tg_pairs)))
-        
+
         for rec_idx, receptor in enumerate(all_receptors):
             rec_exp = get_receptor_expression(receptor, cell)
+
             if rec_exp == 0:
                 continue
+
             for tf in rec_tf_map.get(receptor, set()):
                 if tf not in tf_to_pairs:
                     continue
-                
+
                 pcc = pcc_map.get((receptor, tf), 0)
-                pair_indices = [tf_tg_score_df.columns.get_loc(p) for p in tf_to_pairs[tf]]
-                cell_data[rec_idx, pair_indices] = rec_exp * pcc * cell_scores.iloc[pair_indices].values
-        
+
+                pair_indices = [
+                    tf_tg_score_df.columns.get_loc(p)
+                    for p in tf_to_pairs[tf]
+                ]
+
+                cell_data[rec_idx, pair_indices] = (
+                    rec_exp * pcc * cell_scores.iloc[pair_indices].values
+                )
+
         cell_sparse = csr_matrix(cell_data)
         cell_results[cell] = cell_sparse
-        save_npz(f"{output_dir}/{cell}.npz", cell_sparse)
-        
-        combined_data[i, :] = cell_data.ravel()
-    
-    combined_sparse = csr_matrix(combined_data)
-    save_npz(f"{output_dir}/combined_results.npz", combined_sparse)
-    
-    with open(f"{output_dir}/combined_row_names.json", "w") as f:
-        json.dump(cells, f) 
-    with open(f"{output_dir}/combined_col_names.json", "w") as f:
-        json.dump([f"{rec}->{pair}" for rec in all_receptors for pair in all_tf_tg_pairs], f)
-    
-    return cell_results, combined_sparse
+
+        combined_rows.append(cell_sparse.reshape(1, -1))
+
+    combined_sparse = vstack(combined_rows)
+
+    return cell_results, combined_sparse, all_receptors, all_tf_tg_pairs, cells
 
 
 def run_r_tf_tg_intra_strength_pipeline(
@@ -545,16 +529,12 @@ def run_r_tf_tg_intra_strength_pipeline(
     """
     Run intracellular R-TF-TG strength pipeline.
 
-    This function calculates:
-    1. TF-TG scores
-    2. Receptor-TF PCC scores
-    3. R-TF-TG regulation scores
-    4. R-TF-TG correlation scores
-    5. Final R-TF-TG strength
+    Intermediate TF-TG, R-TF-TG_Reg, and R-TF-TG_Cor results are passed in memory.
+    Only final R-TF-TG results are saved to:
+        base_path + 'CCC/R_TF_TG/'
     """
 
-    print("[INFO] Step 1/5: Calculating TF-TG scores...")
-    path_outs = base_path + 'CCC/TF_TG/'
+    print("Step 1/5: Calculating TF-TG scores ...")
 
     tf_tg_scores = calculate_all_tf_tg_scores(
         rna_mat=rna_mat_minmax,
@@ -563,17 +543,17 @@ def run_r_tf_tg_intra_strength_pipeline(
         tf_rep=tf_rep,
         peak_rep=peak_rep,
         tf_re_ba=tf_re_ba,
-        gene_rep=gene_rep,
-        path=path_outs
+        gene_rep=gene_rep
     )
 
-    print(f"[INFO] TF-TG scores calculated. Shape: {tf_tg_scores.shape}")
+    print(f"TF-TG scores calculated. Shape: {tf_tg_scores.shape}")
 
-    print("[INFO] Step 2/5: Filtering non-zero TF-TG scores...")
+    print("Step 2/5: Filtering non-zero TF-TG scores...")
     tf_tg_scores_df = tf_tg_scores.loc[:, (tf_tg_scores != 0).any()]
-    print(f"[INFO] Non-zero TF-TG score matrix shape: {tf_tg_scores_df.shape}")
+    print(f"Non-zero TF-TG score matrix shape: {tf_tg_scores_df.shape}")
 
-    print("[INFO] Step 3/5: Calculating Receptor-TF PCC scores...")
+    print("Step 3/5: Calculating Receptor-TF PCC scores ...")
+
     l_r_tf_df = L_R_TF_TG_df[
         ['Ligand_Symbol', 'Receptor_Symbol', 'TF_Symbol']
     ].drop_duplicates()
@@ -597,59 +577,55 @@ def run_r_tf_tg_intra_strength_pipeline(
 
     rec_tf_pcc = rec_tf_pcc.fillna(0)
 
-    rec_tf_pcc_path = base_path + 'CCC/Receptor_TF_PCC.csv'
-    rec_tf_pcc.to_csv(rec_tf_pcc_path, index=False)
+    print(f"Receptor-TF PCC calculated. Shape: {rec_tf_pcc.shape}")
 
-    print(f"[INFO] Receptor-TF PCC saved to: {rec_tf_pcc_path}")
-    print(f"[INFO] Receptor-TF PCC shape: {rec_tf_pcc.shape}")
+    print("Step 4/5: Calculating R-TF-TG regulation scores ...")
 
-    print("[INFO] Step 4/5: Calculating R-TF-TG regulation scores...")
-    cell_results_reg, combined_results_reg = calculate_r_tf_tg_reg(
+    (
+        cell_results_reg,
+        combined_results_reg,
+        global_row_names,
+        global_col_names,
+        global_cell_names
+    ) = calculate_r_tf_tg_reg(
         cell_rep=cell_rep_aligned,
         tf_tg_score_df=tf_tg_scores_df,
         rec_tf_pcc=rec_tf_pcc,
-        rna_mat=rna_mat_minmax,
-        output_dir=base_path + "CCC/R_TF_TG_Reg"
+        rna_mat=rna_mat_minmax
     )
 
-    print("[INFO] R-TF-TG regulation scores calculated.")
+    print("R-TF-TG regulation scores calculated.")
+    print(f"Number of receptors: {len(global_row_names)}")
+    print(f"Number of TF-TG pairs: {len(global_col_names)}")
 
-    print("[INFO] Loading global row and column names from R_TF_TG_Reg...")
-    with open(base_path + 'CCC/R_TF_TG_Reg/global_row_names.json', 'r') as f:
-        global_row_names = json.load(f)
+    print("Step 5/5: Calculating R-TF-TG correlation scores...")
 
-    with open(base_path + 'CCC/R_TF_TG_Reg/global_col_names.json', 'r') as f:
-        global_col_names = json.load(f)
-
-    print(f"[INFO] Number of receptors: {len(global_row_names)}")
-    print(f"[INFO] Number of TF-TG pairs: {len(global_col_names)}")
-
-    print("[INFO] Step 5/5: Calculating R-TF-TG correlation scores...")
     cell_results_cor, combined_cor = calculate_r_tf_tg_cor(
         gene_rep=gene_rep,
         tf_rep=tf_rep,
         cell_rep=cell_rep_aligned,
         receptors=global_row_names,
         tf_tg_pairs=global_col_names,
-        reg_dir=base_path + "CCC/R_TF_TG_Reg",
-        output_dir=base_path + "CCC/R_TF_TG_Cor"
+        reg_cell_results=cell_results_reg
     )
 
-    print("[INFO] R-TF-TG correlation scores calculated.")
+    print("R-TF-TG correlation scores calculated.")
 
-    print("[INFO] Combining regulation and correlation scores into final R-TF-TG strength...")
-    cor_dir = base_path + "CCC/R_TF_TG_Cor"
-    reg_dir = base_path + "CCC/R_TF_TG_Reg"
+    print("Combining regulation and correlation scores into final R-TF-TG strength...")
+
+    final_output_dir = base_path + "CCC/R_TF_TG"
 
     cell_results_tol, combined_tol = calculate_r_tf_tg_strength(
         cell_rep=cell_rep_aligned,
-        cor_dir=cor_dir,
-        reg_dir=reg_dir,
-        output_dir=base_path + "CCC/R_TF_TG"
+        cor_cell_results=cell_results_cor,
+        reg_cell_results=cell_results_reg,
+        receptors=global_row_names,
+        tf_tg_pairs=global_col_names,
+        output_dir=final_output_dir
     )
 
-    print("[INFO] R-TF-TG strength calculation completed.")
-    print(f"[INFO] Final R-TF-TG results saved to: {base_path + 'CCC/R_TF_TG'}")
+    print("R-TF-TG strength calculation completed.")
+    print(f"Final R-TF-TG results saved to: {final_output_dir}")
 
     return {
         "tf_tg_scores": tf_tg_scores,
@@ -661,8 +637,10 @@ def run_r_tf_tg_intra_strength_pipeline(
         "combined_cor": combined_cor,
         "cell_results_tol": cell_results_tol,
         "combined_tol": combined_tol,
+        "global_row_names": global_row_names,
+        "global_col_names": global_col_names,
+        "global_cell_names": global_cell_names,
     }
-
 
 
 def calculate_l_r_tf_tg_strength(
@@ -730,7 +708,7 @@ def calculate_l_r_tf_tg_strength(
             total_signal = inter_signal * intra_signal
             pathway = f"{ligand}->{receptor}->{tf}->{tg}"
             result_data[pathway] = total_signal
-        
+            
         if result_data:
             result_df = pd.DataFrame(result_data, index=cell_names)
             result_df.to_csv(f"{output_dir}/{ligand}.csv", index=True)
@@ -1351,6 +1329,302 @@ def Identify_significant_paths(
 
 
 
+def Identify_significant_paths_by_gene_role(
+    base_path,
+    L_R_TF_TG_df,
+    gene_role='Ligand_Symbol',
+    background_dir=None,
+    sample_dir=None,
+    output_dir=None,
+    z_critical=None,
+    alpha=0.05
+):
+    """
+    Identify significant L-R-TF-TG paths for each gene in a selected gene role.
+
+    Parameters
+    ----------
+    base_path : str
+        Base directory of the dataset.
+
+    L_R_TF_TG_df : pd.DataFrame
+        DataFrame containing L-R-TF-TG paths.
+
+    gene_role : str
+        Gene role used to group paths, e.g. 'Ligand_Symbol' or 'TG_Symbol'.
+
+    background_dir : str or None
+        Directory containing background cascade result files.
+        If None, use base_path + 'CCC/L_R_TF_TG/random_ligand_cascade_results_parallel/'.
+
+    sample_dir : str or None
+        Directory containing sample cascade result files.
+        If None, use base_path + 'CCC/L_R_TF_TG/ligand_cascade_results/'.
+
+    output_dir : str or None
+        Directory to save significant path results.
+        If None, use base_path + 'CCC/Stats_results/'.
+
+    z_critical : float or None
+        Z-score threshold. If None, determined by alpha.
+
+    alpha : float
+        Significance level.
+
+    Returns
+    -------
+    sig_path_dict : dict
+        Dictionary of significant path DataFrames keyed by gene name.
+    """
+    import polars as pl
+
+    valid_gene_roles = ['Ligand_Symbol', 'TG_Symbol']
+
+    if gene_role not in valid_gene_roles:
+        raise ValueError(
+            f"Invalid gene_role: {gene_role}. "
+            f"Please choose from {valid_gene_roles}."
+        )
+
+    if output_dir is None:
+        if gene_role == 'Ligand_Symbol':
+            output_dir = base_path + 'CCC/Stats_results_Lig/'
+        elif gene_role == 'TG_Symbol':
+            output_dir = base_path + 'CCC/Stats_results_TG/'
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Significant path results will be saved to: {output_dir}")
+
+    if gene_role not in L_R_TF_TG_df.columns:
+        raise ValueError(f"gene_role '{gene_role}' not found in L_R_TF_TG_df columns")
+
+    if background_dir is None:
+        background_dir = base_path + 'CCC/L_R_TF_TG/random_ligand_cascade_results/'
+
+    if sample_dir is None:
+        sample_dir = base_path + 'CCC/L_R_TF_TG/ligand_cascade_results/'
+
+
+    print(f"Identifying significant paths by gene_role: {gene_role}")
+    print(f"Background directory: {background_dir}")
+    print(f"Output directory: {output_dir}")
+
+    gene_interest_lst = L_R_TF_TG_df[gene_role].dropna().unique().tolist()
+
+    sig_path_dict = {}
+
+    for gene_item in tqdm(gene_interest_lst, desc=f"Processing {gene_role}"):
+        background_file = background_dir + gene_item + '.csv'
+        sample_file = sample_dir + gene_item + '.csv'
+        output_path = output_dir + 'Significant_paths_' + gene_item + '.csv'
+
+        if not os.path.exists(background_file) or not os.path.exists(sample_file):
+            print(f"Skipping {gene_item}: File not found")
+            continue
+
+        try:
+            background_ccc_df = pl.read_csv(background_file)
+            background_ccc_df = background_ccc_df.to_pandas().set_index(
+                background_ccc_df.columns[0]
+            )
+
+            sample_ccc_df = pd.read_csv(
+                sample_file,
+                sep=',',
+                index_col=0
+            )
+
+            sig_path_pair = Identify_significant_paths(
+                background_inter_df=background_ccc_df,
+                sample_inter_df=sample_ccc_df,
+                output_path=output_path,
+                z_critical=z_critical,
+                alpha=alpha
+            )
+
+            sig_path_dict[gene_item] = sig_path_pair
+
+        except Exception as e:
+            print(f"Error processing {gene_item}: {str(e)}")
+            continue
+
+    print(f"Finished significant path identification for gene_role: {gene_role}")
+    print(f"Successfully processed genes: {len(sig_path_dict)}")
+
+    return sig_path_dict
+
+
+
+def Identify_significant_paths_celltype_by_gene_role(
+    base_path,
+    L_R_TF_TG_df,
+    gene_role='Ligand_Symbol',
+    celltype_file=None,
+    stats_dir=None,
+    sample_dir=None,
+    output_dir=None,
+    agg_method='mean',
+    volatile_threshold=0.1,
+    volatile_method='ratio',
+    min_cells_count=None
+):
+    """
+    Identify significant L-R-TF-TG paths at cell-type level for each ligand or TG.
+
+    Parameters
+    ----------
+    base_path : str
+        Base directory of the dataset.
+
+    L_R_TF_TG_df : pd.DataFrame
+        DataFrame containing L-R-TF-TG paths.
+
+    gene_role : str
+        'Ligand_Symbol' or 'TG_Symbol'.
+
+    celltype_file : str or None
+        Cell type annotation file. If None, use base_path + 'inputs/celltype_info.csv'.
+
+    stats_dir : str or None
+        Directory containing Significant_paths_*.csv files.
+
+    sample_dir : str or None
+        Directory containing sample cascade result files.
+
+    output_dir : str or None
+        Directory to save cell-type-level significant path results.
+
+    agg_method : str
+        Aggregation method for cell-type-level scores.
+
+    volatile_threshold : float
+        Threshold for volatile path detection.
+
+    volatile_method : str
+        Method for volatile path detection, e.g. 'ratio', 'mad', 'mean', 'median'.
+
+    Returns
+    -------
+    sig_path_ct_dict : dict
+        Dictionary of cell-type-level significant path DataFrames keyed by gene name.
+    """
+
+    valid_gene_roles = ['Ligand_Symbol', 'TG_Symbol']
+
+    if gene_role not in valid_gene_roles:
+        raise ValueError(
+            f"Invalid gene_role: {gene_role}. "
+            f"Please choose from {valid_gene_roles}."
+        )
+
+    if gene_role not in L_R_TF_TG_df.columns:
+        raise ValueError(f"gene_role '{gene_role}' not found in L_R_TF_TG_df columns")
+
+    if celltype_file is None:
+        celltype_file = base_path + 'inputs/celltype_info.csv'
+
+    cell_clus = pd.read_csv(
+        celltype_file,
+        header=0,
+        index_col=0,
+        sep="\t"
+    )
+
+    if 'celltype' in cell_clus.columns and 'cell_type' not in cell_clus.columns:
+        cell_clus = cell_clus.rename(columns={'celltype': 'cell_type'})
+
+    if 'cell_type' not in cell_clus.columns:
+        raise ValueError("celltype annotation must contain column 'cell_type'")
+
+    if stats_dir is None:
+        if gene_role == 'Ligand_Symbol':
+            stats_dir = base_path + 'CCC/Stats_results_Lig/'
+        elif gene_role == 'TG_Symbol':
+            stats_dir = base_path + 'CCC/Stats_results_TG/'
+
+    if sample_dir is None:
+        if gene_role == 'Ligand_Symbol':
+            sample_dir = base_path + 'CCC/L_R_TF_TG/ligand_cascade_results/'
+        elif gene_role == 'TG_Symbol':
+            sample_dir = base_path + 'CCC/L_R_TF_TG/TG_cascade_results/'
+
+    if output_dir is None:
+        if gene_role == 'Ligand_Symbol':
+            output_dir = base_path + 'CCC/Stats_results_Lig/'
+        elif gene_role == 'TG_Symbol':
+            output_dir = base_path + 'CCC/Stats_results_TG/'
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Cell-type-level significant path results will be saved to: {output_dir}")
+
+    gene_interest_lst = L_R_TF_TG_df[gene_role].dropna().unique().tolist()
+
+    sig_path_ct_dict = {}
+
+    for gene_item in tqdm(gene_interest_lst, desc=f"Processing {gene_role} at cell-type level"):
+        sig_path_file = stats_dir + 'Significant_paths_' + gene_item + '.csv'
+        sample_ccc_file = sample_dir + gene_item + '.csv'
+        output_path = output_dir + 'Significant_paths_ct_' + gene_item + '.csv'
+
+        if not os.path.exists(sig_path_file) or not os.path.exists(sample_ccc_file):
+            print(f"Skipping {gene_item}: Required files not found")
+            continue
+
+        try:
+            sig_path_pair = pd.read_csv(
+                sig_path_file,
+                header=0,
+                sep=","
+            )
+
+            sample_CCC_df = pd.read_csv(
+                sample_ccc_file,
+                sep=',',
+                index_col=0
+            )
+
+            sig_path_pair_celltype = Identify_significant_paths_celltype(
+                sig_path_pair,
+                cell_clus,
+                agg_method=agg_method
+            )
+
+            merged = sample_CCC_df.join(cell_clus)
+
+            sample_CCC_ct_df = merged.groupby('cell_type').mean(numeric_only=True)
+            sample_CCC_ct_df.index.name = None
+
+            (
+                vola_path_pair_celltype,
+                vola_path_pair_celltype_vscore,
+                vola_path_pair_celltype_bin,
+                _
+            ) = Identify_volatile_paths_celltype(
+                sample_CCC_ct_df,
+                threshold=volatile_threshold,
+                method=volatile_method
+            )
+
+            sig_path_pair_celltype_concat = Identify_concat_paths_celltype(
+                sig_path_pair_celltype,
+                vola_path_pair_celltype,
+                output_path
+            )
+
+            sig_path_ct_dict[gene_item] = sig_path_pair_celltype_concat
+
+        except Exception as e:
+            print(f"Error processing {gene_item}: {str(e)}")
+            continue
+
+    print(f"Finished cell-type-level significant path identification for gene_role: {gene_role}")
+    print(f"Successfully processed genes: {len(sig_path_ct_dict)}")
+
+    return sig_path_ct_dict
+
+
 def Identify_significant_lr_pairs_celltype(sif_df, celltype, agg_method='mean'):
     if not isinstance(sif_df, pd.DataFrame) or not isinstance(celltype, pd.DataFrame):
         raise ValueError("inputs need pandas DataFrame")
@@ -1554,7 +1828,7 @@ def calculate_l_r_tf_tg_strength_cellwise(
 
 
 def generate_neighbor_ligand_expression_matrix(base_path, cell_names=None, repeat_times=1):
-    print("[INFO] Generating background expression data")
+    print("Generating background expression data")
 
     nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', index_col=None, header=None, sep="\t")
     rna_mat = pd.read_csv(base_path + 'CCC/expression_smooth.txt', header=0, index_col=0, sep="\t")
@@ -1588,7 +1862,7 @@ def generate_neighbor_ligand_expression_matrix(base_path, cell_names=None, repea
     if cell_names is not None:
         result_mat_minmax = result_mat_minmax[cell_names]
 
-    print(f"[INFO] Background expression matrix shape: {result_mat_minmax.shape}")
+    print(f"Background expression matrix shape: {result_mat_minmax.shape}")
 
     return result_mat_minmax
 
@@ -2054,7 +2328,7 @@ def sig_LR_with_source_target(base_path,db,cell_type):
     return results_df
     
     
-def Identify_significant_lr_pairs_celltypes(base_path, sif_df, agg_method='mean', min_cells_count=10):
+def sig_LR_with_source_target_celltypes(base_path, sif_df, agg_method='mean', min_cells_count=10):
     if not isinstance(sif_df, pd.DataFrame):
         raise ValueError("input needs to be pandas DataFrame")
     
@@ -2090,7 +2364,7 @@ def Identify_significant_lr_pairs_celltypes(base_path, sif_df, agg_method='mean'
     return result_df
 
 
-def sig_path_with_source_target(base_path,db, cell_type):
+def sig_path_with_source_target(base_path, db, cell_type):
     ligand_unique = db['Ligand_Symbol'].unique()
     to_lst = []
     path_lst = []
@@ -2140,7 +2414,7 @@ def sig_path_with_source_target(base_path,db, cell_type):
 
 
 
-def Identify_significant_lrfg_paths_celltypes(sif_df, agg_method='mean', min_cells_count=10):
+def sig_path_with_source_target_celltypes(base_path, sif_df, agg_method='mean', min_cells_count=10):
     if not isinstance(sif_df, pd.DataFrame):
         raise ValueError("input needs to be pandas DataFrame")
     
@@ -2169,6 +2443,9 @@ def Identify_significant_lrfg_paths_celltypes(sif_df, agg_method='mean', min_cel
                                           'target': 'Target_Type',
                                           'comm_score': 'Comm_Score',
                                           'z_score': 'Z_Score'})
+    result_df.to_csv(os.path.join(base_path, f'CCC/Significant_paths_res_celltype.csv'), index=False)
+    print(f"Saved results for Significant_paths to {os.path.join(base_path, f'CCC/Significant_paths_res_celltype.csv')}, shape: {result_df.shape}")
+
     return result_df
 
 

@@ -450,7 +450,7 @@ def run_plot_communication_double_panel(
     nei_adj_path = base_path + 'CCC/Nei_adj.csv'
     if not os.path.exists(nei_adj_path):
         raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")
-    print(f"[INFO] Loading Nei_adj from: {nei_adj_path}")
+    print(f"Loading Nei_adj from: {nei_adj_path}")
     Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
 
     # ===== Step 1: adjacency =====
@@ -635,7 +635,6 @@ def plot_comm_strength(
     
 def plot_ccc_flow_for_signaling(
     pathway_name,
-    Nei_adj,
     Sig_LR_path,
     lr_with_pathway,
     cell_clus,
@@ -681,6 +680,11 @@ def plot_ccc_flow_for_signaling(
     rad : float
         Curvature of arrows
     """
+    nei_adj_path = base_path + 'CCC/Nei_adj.csv'     
+    if not os.path.exists(nei_adj_path):         
+        raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")     
+    print(f"Loading Nei_adj from: {nei_adj_path}")     
+    Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
 
     # ===== Step 1: adjacency =====
     adj = get_sender_adj(Nei_adj, cell_clus)
@@ -812,7 +816,7 @@ def plot_two_hop_signaling(
 
     # ===== Load data =====
     Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', header=None, index_col=None)
-    Sig_LR = pd.read_csv(base_path + 'CCC/Sig_Res/Significant_LRs.csv')
+    Sig_LR = pd.read_csv(base_path + 'CCC/Significant_LRs.csv')
     
     lr_with_pathway['LR_Symbol'] = (
         lr_with_pathway['Ligand_Symbol'] + '->' + lr_with_pathway['Receptor_Symbol']
@@ -1324,10 +1328,6 @@ def plot_two_hop_cell_identity_combined(
     plot_df["is_source"] = plot_df.index.isin(source_cells)
     plot_df["is_relay"] = plot_df.index.isin(relay_cells)
     plot_df["is_target"] = plot_df.index.isin(target_cells)
-
-    print("source cells:", plot_df["is_source"].sum())
-    print("relay cells:", plot_df["is_relay"].sum())
-    print("target cells:", plot_df["is_target"].sum())
 
     # ===== Default plotting style =====
     if marker_map is None:

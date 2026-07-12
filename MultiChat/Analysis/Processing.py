@@ -24,7 +24,7 @@ def Preprocess_CCC_model(base_path, lr_database, cell_rep, expmatrix):
     '''
     ccc_path = os.path.join(base_path, "CCC")
     os.makedirs(ccc_path, exist_ok=True)
-    print(f"[INFO] Directory for ligand and receptor expression files: {ccc_path}")
+    print(f"Directory for ligand and receptor expression files: {ccc_path}")
 
     latent_fea = cell_rep
     mat = expmatrix.to_numpy()
