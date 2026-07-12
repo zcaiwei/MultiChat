@@ -1,4 +1,3 @@
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/zcaiwei/MultiChat/main/MultiChat_logo.png" alt="MultiChat Logo" width="160">
 </p>
@@ -14,9 +13,9 @@ A detailed tutorial is available at [this website](https://multichat.readthedocs
 ## Installation
 
 
-The MultiChat package is developed based on the Python libraries [Scanpy](https://scanpy.readthedocs.io/en/stable/), [PyTorch](https://pytorch.org/) and [PyG](https://github.com/pyg-team/pytorch_geometric) (*PyTorch Geometric*) framework.
+MultiChat is developed based on [Scanpy](https://scanpy.readthedocs.io/en/stable/), [PyTorch](https://pytorch.org/), and [PyG](https://github.com/pyg-team/pytorch_geometric) (*PyTorch Geometric*). PyG is recommended to be installed via Conda before installing MultiChat. For CUDA-specific PyTorch/PyG installation instructions, please refer to the [official PyG installation guide](https://github.com/pyg-team/pytorch_geometric#installation).
 
-Follow the following steps in your terminal to install ```MultiChat``` in your local enviroment.
+Follow the steps below in your terminal to install ```MultiChat``` in your local environment.
 
 
 ### 1. Set up Environment
@@ -31,43 +30,33 @@ conda create -n env_MultiChat python=3.12
 conda activate env_MultiChat
 ```
 
-### 2. Install Dependencies (PyTorch & PyG)
-Since PyG relies on system-specific libraries, it is recommended to install it via Conda before installing MultiChat:
 
-```
-conda install pyg
-conda install conda-forge::pytorch_scatter
-conda install conda-forge::pytorch_cluster
-conda install conda-forge::pytorch_sparse
-```
-**Note**: For specific CUDA versions or other installation methods for PyTorch/PyG, please refer to the [official PyG installation guide](https://github.com/pyg-team/pytorch_geometric#installation).
-
-
-### 3. Install MultiChat
+### 2. Install MultiChat
 
 
 **Option A: Install from PyPI (Recommended)** 
 
 The easiest way to install the stable version of MultiChat is via pip:
 
-```
+```bash
 pip install scMultiChat
 ```
 
 
 **Option B: Install from Source**
 
-```
+```bash
 git clone https://github.com/zcaiwei/MultiChat.git
-cd MultiChat-main
+cd MultiChat
 
-# Install requirements
+# Install dependencies
 pip install -r requirements.txt
 
-# Build and install 
-python setup.py build 
-python setup.py install
+# Install MultiChat from source 
+pip install .
+
 ```
+
 **Note**
 
 - The PyPI version has been tested on both **Linux and Windows environments**, and installation has been verified to work successfully. If you encounter any issues during installation or usage, please feel free to open an issue or leave a message.
@@ -108,9 +97,6 @@ A file describing cell annotations:
 This file is used to define cell identities and enable cell-type-level analysis.
 
 
-
-
-
 ### 5. Database (**Optional**)
 
 MultiChat provides a built-in curated database. Users may also supply a custom database by providing a CSV, TSV or TXT file containing ligand–receptor (L–R) or ligand–receptor–transcription factor–target gene (L–R–TF–TG) information. The file should contain the following columns:
@@ -140,7 +126,7 @@ Used when performing **multi-layer signaling inference**.
 
 After the installation is complete, you can import and use `MultiChat` in your Python scripts or interactive sessions like this:
 
-```
+```bash
 import MultiChat as MC
 ```
 
