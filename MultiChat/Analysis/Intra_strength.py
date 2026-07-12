@@ -514,7 +514,7 @@ def calculate_r_tf_tg_reg(
     return cell_results, combined_sparse, all_receptors, all_tf_tg_pairs, cells
 
 
-def run_r_tf_tg_intra_strength_pipeline(
+def run_intra_strength_pipeline(
     base_path,
     rna_mat_minmax,
     atac_mat_minmax,
@@ -1459,8 +1459,8 @@ def Identify_significant_paths_by_gene_role(
 def Identify_significant_paths_celltype_by_gene_role(
     base_path,
     L_R_TF_TG_df,
+    celltype_df,
     gene_role='Ligand_Symbol',
-    celltype_file=None,
     stats_dir=None,
     sample_dir=None,
     output_dir=None,
@@ -1483,8 +1483,8 @@ def Identify_significant_paths_celltype_by_gene_role(
     gene_role : str
         'Ligand_Symbol' or 'TG_Symbol'.
 
-    celltype_file : str or None
-        Cell type annotation file. If None, use base_path + 'inputs/celltype_info.csv'.
+    celltype_df : pd.DataFrame or None
+        Cell type annotation DataFrame. 
 
     stats_dir : str or None
         Directory containing Significant_paths_*.csv files.
@@ -1521,15 +1521,10 @@ def Identify_significant_paths_celltype_by_gene_role(
     if gene_role not in L_R_TF_TG_df.columns:
         raise ValueError(f"gene_role '{gene_role}' not found in L_R_TF_TG_df columns")
 
-    if celltype_file is None:
-        celltype_file = base_path + 'inputs/celltype_info.csv'
-
-    cell_clus = pd.read_csv(
-        celltype_file,
-        header=0,
-        index_col=0,
-        sep="\t"
-    )
+    if celltype_df is not None:
+        cell_clus = celltype_df.copy()
+    else:
+        raise ValueError("celltype_df must be provided as a DataFrame")
 
     if 'celltype' in cell_clus.columns and 'cell_type' not in cell_clus.columns:
         cell_clus = cell_clus.rename(columns={'celltype': 'cell_type'})
@@ -2450,12 +2445,11 @@ def sig_path_with_source_target_celltypes(base_path, sif_df, agg_method='mean', 
 
 
 
-def calculate_all_tf_tg_scores_ablation(rna_mat, tf_list, tg_list, path):
+def calculate_all_tf_tg_scores_ablation(rna_mat, tf_list, tg_list):
     """
     Calculate TF-TG score after ablation of ATAC information (dependent only on RNA expression level)
     """
     
-    os.makedirs(path, exist_ok=True)
     samples = rna_mat.columns
     
     tfs = list(set(tf_list))
@@ -2470,16 +2464,6 @@ def calculate_all_tf_tg_scores_ablation(rna_mat, tf_list, tg_list, path):
     )
     
     for sample in tqdm(samples, desc="Processing cells (Ablation Mode)"):
-        sample_file = os.path.join(path, f"{sample}.csv")
-        
-        if os.path.exists(sample_file):
-            try:
-                sample_results = pd.read_csv(sample_file, index_col=0)
-                if sample_results.shape[0] == len(tfs) and sample_results.shape[1] == len(tgs):
-                    final_results.loc[sample] = sample_results.values.ravel()
-                    continue
-            except:
-                pass
         
         sample_rna = rna_mat[sample]
         
@@ -2488,11 +2472,116 @@ def calculate_all_tf_tg_scores_ablation(rna_mat, tf_list, tg_list, path):
         
         score_matrix = np.outer(tf_vals, tg_vals)
         
-        sample_results = pd.DataFrame(score_matrix, index=tfs, columns=tgs)
-        sample_results.to_csv(sample_file)
-        
         final_results.loc[sample] = score_matrix.ravel()
-        
-    final_results.to_csv(os.path.join(path, "all_samples_tf_tg_scores.csv"))
     
     return final_results
+
+
+def run_intra_strength_ablation_pipeline(
+    base_path,
+    rna_mat_minmax,
+    gene_rep,
+    tf_rep,
+    cell_rep,
+    L_R_TF_TG_df
+):
+    """
+    Run ablation intracellular R-TF-TG strength pipeline.
+
+    In this ablation mode:
+    1. TF-TG scores are calculated using RNA expression only.
+    2. Receptor-TF PCC scores are set to 1.0.
+    3. Intermediate TF-TG, R_TF_TG_Reg, and R_TF_TG_Cor files are not saved.
+    4. Only final R-TF-TG results are saved to:
+        base_path + 'CCC/R_TF_TG/'
+    """
+
+    print("Step 1/5: Calculating ablation TF-TG scores using RNA expression only...")
+
+    tf_tg_scores = calculate_all_tf_tg_scores_ablation(
+        rna_mat=rna_mat_minmax,
+        tf_list=list(set(L_R_TF_TG_df['TF_Symbol'].to_list())),
+        tg_list=list(set(L_R_TF_TG_df['TG_Symbol'].to_list()))
+    )
+
+    print(f"Ablation TF-TG scores calculated. Shape: {tf_tg_scores.shape}")
+
+    print("Step 2/5: Filtering non-zero ablation TF-TG scores...")
+    tf_tg_scores_df = tf_tg_scores.loc[:, (tf_tg_scores != 0).any()]
+    print(f"Non-zero ablation TF-TG score matrix shape: {tf_tg_scores_df.shape}")
+
+    print("Step 3/5: Preparing Receptor-TF scores for ablation mode...")
+
+    rec_tf_df = L_R_TF_TG_df[
+        ['Receptor_Symbol', 'TF_Symbol']
+    ].drop_duplicates().reset_index(drop=True)
+
+    rec_tf_pcc = rec_tf_df.copy()
+
+    rec_tf_pcc['scores'] = 1.0
+
+    print(f"Ablation Receptor-TF score matrix prepared. Shape: {rec_tf_pcc.shape}")
+
+    print("Step 4/5: Calculating ablation R-TF-TG regulation scores...")
+
+    (
+        cell_results_reg,
+        combined_results_reg,
+        global_row_names,
+        global_col_names,
+        global_cell_names
+    ) = calculate_r_tf_tg_reg(
+        cell_rep=cell_rep,
+        tf_tg_score_df=tf_tg_scores_df,
+        rec_tf_pcc=rec_tf_pcc,
+        rna_mat=rna_mat_minmax
+    )
+
+    print("Ablation R-TF-TG regulation scores calculated.")
+    print(f"Number of receptors: {len(global_row_names)}")
+    print(f"Number of TF-TG pairs: {len(global_col_names)}")
+
+    print("Step 5/5: Calculating ablation R-TF-TG correlation scores...")
+
+    cell_results_cor, combined_cor = calculate_r_tf_tg_cor(
+        gene_rep=gene_rep,
+        tf_rep=tf_rep,
+        cell_rep=cell_rep,
+        receptors=global_row_names,
+        tf_tg_pairs=global_col_names,
+        reg_cell_results=cell_results_reg
+    )
+
+    print("Ablation R-TF-TG correlation scores calculated.")
+
+    print("Combining ablation regulation and correlation scores into final R-TF-TG strength...")
+
+    final_output_dir = base_path + "CCC/R_TF_TG"
+
+    # [MODIFIED] use in-memory cor/reg results; only final R_TF_TG folder is saved
+    cell_results_tol, combined_tol = calculate_r_tf_tg_strength(
+        cell_rep=cell_rep,
+        cor_cell_results=cell_results_cor,
+        reg_cell_results=cell_results_reg,
+        receptors=global_row_names,
+        tf_tg_pairs=global_col_names,
+        output_dir=final_output_dir
+    )
+
+    print("Ablation R-TF-TG strength calculation completed.")
+    print(f"Final ablation R-TF-TG results saved to: {final_output_dir}")
+
+    return {
+        "tf_tg_scores": tf_tg_scores,
+        "tf_tg_scores_df": tf_tg_scores_df,
+        "rec_tf_pcc": rec_tf_pcc,
+        "cell_results_reg": cell_results_reg,
+        "combined_results_reg": combined_results_reg,
+        "cell_results_cor": cell_results_cor,
+        "combined_cor": combined_cor,
+        "cell_results_tol": cell_results_tol,
+        "combined_tol": combined_tol,
+        "global_row_names": global_row_names,
+        "global_col_names": global_col_names,
+        "global_cell_names": global_cell_names,
+    }
