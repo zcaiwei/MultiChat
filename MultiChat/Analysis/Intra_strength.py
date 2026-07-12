@@ -643,7 +643,7 @@ def run_intra_strength_pipeline(
     }
 
 
-def calculate_l_r_tf_tg_strength(
+def calculate_path_strength(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -717,7 +717,7 @@ def calculate_l_r_tf_tg_strength(
 
     
     
-def calculate_l_r_tf_tg_strength_by_tg(
+def calculate_path_strength_by_tg(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -783,7 +783,7 @@ def calculate_l_r_tf_tg_strength_by_tg(
 
 
 
-def generate_background_l_r_tf_tg_strength(
+def generate_background_path_strength(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -885,7 +885,7 @@ def generate_background_l_r_tf_tg_strength(
 
 
 
-def generate_background_l_r_tf_tg_strength_parallel(
+def generate_background_path_strength_parallel(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -1009,7 +1009,7 @@ def _process_single_ligand(
 
 
 
-def generate_background_l_r_tf_tg_strength_by_tg(
+def generate_background_path_strength_by_tg(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -1097,7 +1097,7 @@ def generate_background_l_r_tf_tg_strength_by_tg(
     
 
 
-def generate_background_l_r_tf_tg_strength_by_tg_parallel(
+def generate_background_path_strength_by_tg_parallel(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -1751,7 +1751,7 @@ def Identify_concat_lr_pairs_celltype(sig_LR_pair_celltype,vola_LR_pair_celltype
 
 
 
-def calculate_l_r_tf_tg_strength_cellwise(
+def calculate_path_strength_cellwise(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -1862,7 +1862,7 @@ def generate_neighbor_ligand_expression_matrix(base_path, cell_names=None, repea
     return result_mat_minmax
 
 
-def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
+def calculate_path_strength_cellwise_with_lexp(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -1959,7 +1959,7 @@ def calculate_l_r_tf_tg_strength_cellwise_with_lexp(
 
 
 
-def generate_background_l_r_tf_tg_strength_cellwise(
+def generate_background_path_strength_cellwise(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,
@@ -2059,7 +2059,7 @@ def generate_background_l_r_tf_tg_strength_cellwise(
         
         
         
-def generate_background_l_r_tf_tg_strength_cellwise_with_lexp(
+def generate_background_path_strength_cellwise_with_lexp(
     l_r_tf_tg_df: pd.DataFrame,
     combined_npz_path: str,
     global_row_names_path: str,

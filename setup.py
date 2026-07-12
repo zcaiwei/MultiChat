@@ -6,7 +6,7 @@ def read_requirements():
 
 setup(
     name="scMultiChat",
-    version="0.2.0",
+    version="0.2.1",
     packages=find_packages(),
     install_requires=read_requirements(),
     author="Caiwei Zhen",
