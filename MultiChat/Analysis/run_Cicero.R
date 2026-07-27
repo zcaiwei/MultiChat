@@ -5,37 +5,37 @@
 #======================#
 args <- commandArgs(trailingOnly = TRUE)
 
-if (length(args) < 4) {
-  stop("Usage: Rscript run_cicero.R <input_csv> <genome> <output_txt> <output_rdata>")
+if (length(args) < 3) {
+  stop("Usage: Rscript run_cicero.R <input_csv> <genome> <output_txt>")
 }
 
 input_csv   <- args[1]   # e.g. "ATACmatrix.csv"
 genome_name <- args[2]   # e.g. "mm10"
 output_txt  <- args[3]   # e.g. "ISSAAC_cicero_connections_mm10.txt"
-output_rdata<- args[4]   # e.g. "ISSAAC_cicero_connections_mm10.RData"
 
 cat("Running Cicero pipeline with parameters:\n")
 cat("Input CSV: ", input_csv, "\n")
 cat("Genome: ", genome_name, "\n")
 cat("Output txt: ", output_txt, "\n")
-cat("Output RData: ", output_rdata, "\n")
 
 #======================#
 # Load libraries
 #======================#
 suppressPackageStartupMessages({
   library(cicero)
-  library(Matrix)
-  library(data.table)
-  library(Seurat)
-  library(Signac)
-  library(EnsDb.Mmusculus.v79)
-  library(GenomicRanges)
-  library(rtracklayer)
-  library(reshape2)
-  library(magrittr)
-  library(R.utils)
   library(monocle3)
+  library(data.table)
+  # library(GenomeInfoDb)
+  # library(Matrix)
+  # library(Seurat)
+  # library(Signac)
+  # library(BSgenome.Hsapiens.UCSC.hg38)
+  # library(BSgenome.Mmusculus.UCSC.mm10)
+  # library(GenomicRanges)
+  # library(rtracklayer)
+  # library(reshape2)
+  # library(magrittr)
+  # library(R.utils)
 })
 
 options(stringsAsFactors = FALSE)
@@ -103,6 +103,5 @@ conns_cicero$coaccess[is.na(conns_cicero$coaccess)] <- 0
 # Save results
 #======================#
 write.table(conns_cicero, file = output_txt, sep = "\t", quote = FALSE, row.names = FALSE)
-save(conns_cicero, file = output_rdata)
 
 cat("Cicero run completed successfully!\n")

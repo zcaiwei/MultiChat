@@ -4,7 +4,6 @@ Welcome to MultiChat's documentation!
 Contents:
 
 - :doc:`Installation <installation>`
-- :doc:`Data Preparation: ISSAAC-seq mouse cortex slices <tutorials/data_preprocessing_on_ISSAAC>`
 - :doc:`Tutorial 1: Quick Start – Running MultiChat on Simulated Data <tutorials/run_MultiChat_on_Simulation>`
 - :doc:`Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_ISSAAC>`
 - :doc:`Tutorial 3: Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_Heart>`
@@ -22,7 +21,6 @@ Contents:
    :maxdepth: 1
 
    Installation <installation>
-   Data Preparation: ISSAAC-seq mouse cortex slices <tutorials/data_preprocessing_on_ISSAAC>
    Tutorial 1: Quick Start – Running MultiChat on Simulated Data <tutorials/run_MultiChat_on_Simulation>
    Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_ISSAAC>
    Tutorial 3: Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data <tutorials/run_MultiChat_on_Heart>

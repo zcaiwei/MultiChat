@@ -61,6 +61,57 @@ pip install .
 
 - The PyPI version has been tested on both **Linux and Windows environments**, and installation has been verified to work successfully. If you encounter any issues during installation or usage, please feel free to open an issue or leave a message.
 
+
+### 3. Install R dependencies (Optional, required for ATAC-based regulatory analysis)
+
+The ATAC-related regulatory module of MultiChat requires additional R and Bioconductor packages for chromatin accessibility analysis, co-accessibility inference, and motif-based transcription factor annotation.
+
+This step is only required when performing [**Multi-omics Multi-layer Signaling Inference with ATAC-seq data**](#mode-1-default). Users who only perform ligand–receptor interaction inference without ATAC-seq data can skip this step.
+
+Create the R environment using Conda:
+
+```bash
+conda install -c conda-forge -c bioconda \
+  r-base=4.3 \
+  jq yq \
+  r-remotes \
+  r-biocmanager \
+  r-data.table \
+  r-matrix \
+  r-seurat \
+  r-signac \
+  r-reshape2 \
+  r-magrittr \
+  r-r.utils \
+  r-dplyr \
+  r-tidyr \
+  r-ggplot2 \
+  bioconductor-genomicranges \
+  bioconductor-rtracklayer \
+  bioconductor-ensdb.mmusculus.v79 \
+  -y
+```
+
+Then install the remaining R/Bioconductor packages inside R:
+
+```r
+BiocManager::install(c(
+  "chromVAR",
+  "motifmatchr",
+  "SummarizedExperiment",
+  "TFBSTools",
+  "BSgenome.Mmusculus.UCSC.mm10",
+  "JASPAR2020",
+  "JASPAR2016",
+  "JASPAR2018",
+  "JASPAR2024"
+))
+
+remotes::install_github("GreenleafLab/chromVARmotifs")
+```
+Cicero should be installed by following the [official Cicero installation tutorial](https://cole-trapnell-lab.github.io/cicero-release/docs_m3/#installing-cicero).
+
+
 ## Input Format and Requirements
 
 MultiChat takes either single-cell multi-omics data along with spatial transcriptomics data or spatial multi-omics data as inputs.
@@ -130,6 +181,7 @@ After the installation is complete, you can import and use `MultiChat` in your P
 import MultiChat as MC
 ```
 
+<a id="mode-1-default"></a>
 ### 🔹 Mode 1: Multi-omics Multi-layer Signaling Inference with ATAC-seq data
 
 Please refer to:  tutorials (e.g.,[ISSAAC-seq dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb), [HumanHeart dataset example](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)  ) 
@@ -155,7 +207,6 @@ Please refer to:  [`run_MultiChat_for_ligand-receptor_identification.ipynb`](htt
 
 
 To get started with MultiChat, please refer to the `Tutorial` folder for step-by-step instructions.
-- [Data Preparation Tutorial: Using single cell ISSAAC-seq multi-omics data of mouse cortex slices with MultiChat](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/data_preprocessing_on_ISSAAC.ipynb)
 - [Tutorial 1: Quick Start Guide – Running MultiChat on Simulated Data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Simulation.ipynb)
 - [Tutorial 2: Running MultiChat on paired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_ISSAAC.ipynb)
 - [Tutorial 3:  Running MultiChat on unpaired single-cell multi-omics data along with spatial transcriptomics data](https://github.com/zcaiwei/MultiChat/blob/main/Tutorial/run_MultiChat_on_Heart.ipynb)

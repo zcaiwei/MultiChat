@@ -9,7 +9,7 @@ from ..Model import model_training
 
 
 def run_training(task):
-    run_idx, base_args = task
+    run_idx, bg_adata, base_args = task
 
     args = copy.deepcopy(base_args)
     args.seed = args.seed + run_idx
@@ -33,12 +33,12 @@ def run_training(task):
 
     start = time.time()
 
-    print(f"[INFO] Run {run_idx} starts on {device}")
-    print(f"[INFO] Output Background file: {args.lrp_strength_file}")
+    print(f"Run {run_idx} starts on {device}")
+    print(f"Output Background file: {args.lrp_strength_file}")
 
-    model_training.Train_CCC_model_parallel(args)
+    output_file = model_training.Train_CCC_model_parallel(bg_adata, args)
 
     duration = time.time() - start
-    print(f"[INFO] Finish training run {run_idx}, total time: {duration:.2f}s")
+    print(f"Finish training run {run_idx}, total time: {duration:.2f}s")
 
-    return args.lrp_strength_file
+    return output_file

@@ -2,6 +2,16 @@
 
 from ._settings import settings
 from . import preprocessing as pp
+
+import sys
+from pathlib import Path
+
+_hge_dir = Path(__file__).resolve().parent
+if str(_hge_dir) not in sys.path:
+    sys.path.insert(0, str(_hge_dir))
+from . import torchbiggraph as _torchbiggraph
+sys.modules.setdefault("torchbiggraph", _torchbiggraph)
+
 from . import tools as tl
 from . import plotting as pl
 from .readwrite import *

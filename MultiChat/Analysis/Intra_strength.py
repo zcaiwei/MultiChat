@@ -14,6 +14,244 @@ import glob
 import multiprocessing 
 from functools import partial
 from statsmodels.robust import mad
+import subprocess
+from scipy import sparse
+from pathlib import Path
+
+from . import Processing
+
+
+
+def run_cicero_connections(
+    input_csv,
+    genome,
+    r_path,
+    output_txt,
+    overwrite=False,
+):
+    """
+    Run Cicero and return the generated Cicero connection table.
+
+    Parameters
+    ----------
+    input_csv : str or pathlib.Path
+        Path to the ATAC matrix CSV file used as Cicero input.
+
+    genome : str
+        Genome version passed to Cicero, for example "mm10" or "hg38".
+
+    r_path : str or pathlib.Path
+        Directory containing `run_Cicero.R`.
+
+    output_txt : str or pathlib.Path
+        Path where the Cicero connection TXT file will be saved.
+
+    overwrite : bool, default False
+        Whether to rerun Cicero if `output_txt` already exists.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cicero peak-peak co-accessibility connection table.
+    """
+
+    input_csv = Path(input_csv).expanduser().resolve()
+    r_path = Path(r_path).expanduser().resolve()
+    output_txt = Path(output_txt).expanduser().resolve()
+
+    r_script = r_path / "run_Cicero.R"
+
+    if not input_csv.exists():
+        raise FileNotFoundError(f"input_csv does not exist: {input_csv}")
+
+    if not r_script.exists():
+        raise FileNotFoundError(f"run_Cicero.R does not exist: {r_script}")
+
+    output_txt.parent.mkdir(parents=True, exist_ok=True)
+
+    if overwrite or not output_txt.exists():
+        subprocess.run(
+            [
+                "Rscript",
+                str(r_script),
+                str(input_csv),
+                genome,
+                str(output_txt),
+            ],
+            check=True,
+        )
+
+    if not output_txt.exists():
+        raise FileNotFoundError(f"Cicero output was not generated: {output_txt}")
+
+    cicero_conn = pd.read_csv(output_txt, sep="\t")
+
+    if "coaccess" in cicero_conn.columns:
+        cicero_conn["coaccess"] = cicero_conn["coaccess"].abs()
+
+    return cicero_conn
+
+
+def get_peak_TG_connection(
+    mc_adata,
+    gene_info,
+    scope=2000,
+    cicero_cutoff=0.5,
+    peak_peak_file=None,
+    atac_path=None,
+    genome=None,
+    r_path=None,
+    cicero_output_txt=None,
+    overwrite_cicero=False
+):
+    """
+    Build target gene - regulatory element connections using gene location
+    and Cicero peak-peak coaccessibility.
+
+    Parameters
+    ----------
+    mc_adata: anndata.AnnData
+        Annotated data object containing the single-cell data.
+
+    gene_info : pandas.DataFrame
+        Gene TSS table. It should contain chr/start/end/Gene or
+        chr/starts/ends/genes columns.
+
+    scope : int, default 2000
+        Search range around gene TSS for nearby peaks.
+
+    cicero_cutoff : float, default 0.5
+        Coaccessibility cutoff for Cicero peak-peak links.
+
+    peak_peak_file : str or pathlib.Path, optional
+        Existing Cicero/peak-peak result file. Expected columns:
+        Peak1, Peak2, coaccess.
+        If provided, the function reads this file directly and does not run Cicero.
+
+    atac_path : str or pathlib.Path, optional
+        ATAC count CSV path used to run Cicero if peak_peak_file is None.
+
+    genome : str, optional
+        Genome passed to Cicero, for example "mm10" or "hg38".
+
+    r_path : str or pathlib.Path, optional
+        Directory containing run_Cicero.R.
+
+    cicero_output_txt : str or pathlib.Path, optional
+        Output path for Cicero result if Cicero needs to be run.
+
+    overwrite_cicero : bool, default False
+        Whether to rerun Cicero if cicero_output_txt already exists.
+
+    Returns
+    -------
+    andata.AnnData
+    """
+
+    gene_info = gene_info.copy()
+
+    gene_info = gene_info.rename(
+        columns={
+            "start": "starts",
+            "end": "ends",
+            "Gene": "genes",
+        }
+    )
+
+    marker_genes_df = mc_adata.uns.get("marker_genes", pd.DataFrame())
+    marker_genes = list(set(marker_genes_df['gene'].tolist()))
+    peaks_to_filter = mc_adata.uns.get("peak_lst", [])
+
+    filtered_peaks, genes_peaks = Processing.select_peaks_by_genes_location(
+        gene_info=gene_info,
+        hvg_genes=marker_genes,
+        peaks_to_filter=peaks_to_filter,
+        scope=scope,
+    )
+
+    if peak_peak_file is not None:
+        peak_peak_file = Path(peak_peak_file).expanduser().resolve()
+
+        if not peak_peak_file.exists():
+            raise FileNotFoundError(f"peak_peak_file does not exist: {peak_peak_file}")
+
+        cicero_conn = pd.read_csv(peak_peak_file, sep="\t")
+
+    else:
+        if atac_path is None or genome is None or r_path is None or cicero_output_txt is None:
+            raise ValueError(
+                "If peak_peak_file is None, you must provide "
+                "atac_path, genome, r_path, and cicero_output_txt to run Cicero."
+            )
+
+        cicero_conn = run_cicero_connections(
+            input_csv=atac_path,
+            genome=genome,
+            r_path=r_path,
+            output_txt=cicero_output_txt,
+            overwrite=overwrite_cicero,
+        )
+
+    required_cols = {"Peak1", "Peak2", "coaccess"}
+    missing_cols = required_cols.difference(cicero_conn.columns)
+
+    if missing_cols:
+        raise ValueError(
+            f"peak-peak file must contain columns {required_cols}, "
+            f"missing: {missing_cols}"
+        )
+
+    cicero_conn = cicero_conn.copy()
+    cicero_conn["coaccess"] = cicero_conn["coaccess"].abs()
+
+    genes_all_lst = []
+    peaks_all_lst = []
+    scores_all_lst = []
+
+    for gene, peak_list in tqdm(genes_peaks.items(), desc="Processing genes"):
+        peaks_lst, scores_lst = Processing.cicero_peaks_peaks_score(
+            cicero_conn,
+            peak_list,
+            cicero_cutoff,
+        )
+
+        if peaks_lst:
+            genes_all_lst.extend([gene] * len(peaks_lst))
+            peaks_all_lst.extend(peaks_lst)
+            scores_all_lst.extend(scores_lst)
+
+    TG_RE_score_df = pd.DataFrame(
+        {
+            "genes": genes_all_lst,
+            "peaks": peaks_all_lst,
+            "scores": scores_all_lst,
+        }
+    )
+
+    filtered_cicero = cicero_conn[cicero_conn["coaccess"] >= cicero_cutoff].copy()
+
+    genes_peaks_cicero = {}
+
+    for gene, peak_list in tqdm(genes_peaks.items(), desc="Processing genes"):
+        gene_peak_dict = Processing.cicero_peaks_peaks(
+            filtered_cicero,
+            peak_list,
+            cicero_cutoff,
+        )
+
+        if gene_peak_dict:
+            combined_list = list({
+                peak
+                for peak_group in gene_peak_dict.values()
+                for peak in peak_group
+            })
+            genes_peaks_cicero[gene] = combined_list
+
+    mc_adata.uns["cicero_conn"] = cicero_conn
+    mc_adata.uns["peak-TG_links"] = TG_RE_score_df
+
+    return mc_adata
+
 
 
 def calculate_tf_re(tf_name, re_name, sample_rna, sample_atac, tf_rep, peak_rep, tf_re_ba):
@@ -648,7 +886,7 @@ def calculate_path_strength(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "ligand_cascade_results"
 ) -> None:
     """
@@ -663,7 +901,7 @@ def calculate_path_strength(
             cell_names = json.load(f)
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
@@ -722,7 +960,7 @@ def calculate_path_strength_by_tg(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "TG_cascade_results"
 ) -> None:
     """
@@ -736,7 +974,6 @@ def calculate_path_strength_by_tg(
         cell_names = json.load(f)
     with open(global_col_names_path, 'r') as f:
         r_tf_tg_pairs = json.load(f)
-    ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
 
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
     
@@ -788,9 +1025,10 @@ def generate_background_path_strength(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "random_ligand_cascade_results",
-    random_seed: int = 42
+    random_seed: int = 42,
+    background_number: int = 10
 ) -> None:
     """
     Generate background data
@@ -804,13 +1042,13 @@ def generate_background_path_strength(
             cell_names = json.load(f)
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
     print("Data loaded successfully")
     
-    final_cell_names = cell_names * 10
+    final_cell_names = cell_names * background_number
     print("Final cell names length:", len(final_cell_names))
     
     print("Generating background data by row permutation...")
@@ -818,7 +1056,7 @@ def generate_background_path_strength(
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
     background_matrices = []
 
-    for _ in range(10):
+    for _ in range(background_number):
         new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
         
         permuted_indices = np.arange(original_sparse.shape[0])
@@ -890,10 +1128,11 @@ def generate_background_path_strength_parallel(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "random_ligand_cascade_results",
     random_seed: int = 42,
-    n_processes: int = None
+    n_processes: int = None,
+    background_number: int = 10,
 ) -> None:
     """
     Generate background data by parallel
@@ -907,13 +1146,13 @@ def generate_background_path_strength_parallel(
             cell_names = json.load(f)
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
     print("Data loaded successfully")
     
-    final_cell_names = cell_names * 10
+    final_cell_names = cell_names * background_number
     print("Final cell names length:", len(final_cell_names))
     
     print("Generating background data by row permutation...")
@@ -921,7 +1160,7 @@ def generate_background_path_strength_parallel(
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
     background_matrices = []
 
-    for _ in range(10):
+    for _ in range(background_number):
         new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
         permuted_indices = np.arange(original_sparse.shape[0])
         permuted_indices[nonzero_rows] = new_nonzero_rows
@@ -1014,9 +1253,10 @@ def generate_background_path_strength_by_tg(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "random_TG_cascade_results",
-    random_seed: int = 42
+    random_seed: int = 42,
+    background_number: int = 10
 ) -> None:
     """
     Generate background data grouped by TG through permutation
@@ -1030,7 +1270,7 @@ def generate_background_path_strength_by_tg(
             cell_names = json.load(f)
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
@@ -1038,18 +1278,33 @@ def generate_background_path_strength_by_tg(
 
     print("Generating background matrix by row permutation...")
     np.random.seed(random_seed)
-    
+
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
-    new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
-    permuted_indices = np.arange(original_sparse.shape[0])
-    permuted_indices[nonzero_rows] = new_nonzero_rows
-    
-    background_sparse = csc_matrix(
-        (original_sparse.data, 
-         permuted_indices[original_sparse.indices], 
-         original_sparse.indptr),
-        shape=original_sparse.shape
-    )
+    background_matrices = []
+
+    for _ in range(background_number):
+        new_nonzero_rows = np.random.choice(
+            np.arange(original_sparse.shape[0]),
+            size=len(nonzero_rows),
+            replace=False,
+        )
+
+        permuted_indices = np.arange(original_sparse.shape[0])
+        permuted_indices[nonzero_rows] = new_nonzero_rows
+
+        background_sparse = csc_matrix(
+            (
+                original_sparse.data,
+                permuted_indices[original_sparse.indices],
+                original_sparse.indptr,
+            ),
+            shape=original_sparse.shape,
+        )
+
+        background_matrices.append(background_sparse)
+
+    background_sparse = vstack(background_matrices)
+    cell_names = cell_names * background_number
 
     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
     
@@ -1102,9 +1357,10 @@ def generate_background_path_strength_by_tg_parallel(
     combined_npz_path: str,
     global_row_names_path: str,
     global_col_names_path: str,
-    ccc_lrp_path: str,
+    ccc_lrp_df: pd.DataFrame,
     output_dir: str = "random_TG_cascade_results",
     random_seed: int = 42,
+    background_number: int = 10,
     n_processes: int = None
 ) -> None:
 
@@ -1117,13 +1373,13 @@ def generate_background_path_strength_by_tg_parallel(
             cell_names = json.load(f)
         with open(global_col_names_path, 'r') as f:
             r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return
     print("Data loaded successfully")
     
-    final_cell_names = cell_names * 10
+    final_cell_names = cell_names * background_number
     print("Final cell names length:", len(final_cell_names))
 
     print("Generating background matrix by row permutation...")
@@ -1131,7 +1387,7 @@ def generate_background_path_strength_by_tg_parallel(
     nonzero_rows = np.unique(original_sparse.nonzero()[0])
     background_matrices = []
     
-    for _ in range(10):
+    for _ in range(background_number):
         new_nonzero_rows = np.random.choice(np.arange(original_sparse.shape[0]), size=len(nonzero_rows), replace=False)
         permuted_indices = np.arange(original_sparse.shape[0])
         permuted_indices[nonzero_rows] = new_nonzero_rows
@@ -1243,7 +1499,6 @@ def load_background_inter(base_path, file_pattern="CCC_module_LRP_strength_run_*
 def Identify_significant_lr_pairs(
     background_inter_df: pd.DataFrame,
     sample_inter_df: pd.DataFrame,
-    output_path: str = "sc_Significant_LR.csv",
     z_critical: float = None,
     alpha: float = 0.05,
 ) -> pd.DataFrame:
@@ -1277,9 +1532,14 @@ def Identify_significant_lr_pairs(
         })
         sample_results = sample_results.sort_values("Z_Score", ascending=False)  
         all_sample_results.append(sample_results)
-    all_sample_results = pd.concat(all_sample_results, ignore_index=True)
-    all_sample_results.to_csv(output_path, index=False)
-    print(f"Significant_L->R pairs saved to {output_path}")
+
+    if len(all_sample_results) > 0:
+        all_sample_results = pd.concat(all_sample_results, ignore_index=True)
+    else:
+        all_sample_results = pd.DataFrame(
+            columns=["Sample_Name", "LR_Symbol", "Inter_Score", "Z_Score"]
+        )
+
     
     return all_sample_results
 
@@ -1305,7 +1565,8 @@ def Identify_significant_paths(
     sample_zscore = (sample_inter_df - global_mean) / global_std  
     
     all_sample_results = []
-    for sample_name, sample_data in tqdm(sample_inter_df.iterrows(), desc=f"Processing samples"):
+
+    for sample_name, sample_data in sample_inter_df.iterrows():
         sample_zscore_row = sample_zscore.loc[sample_name]
         significant_mask = sample_zscore_row > z_critical  
         significant_pathways = sample_zscore_row[significant_mask].index.tolist()  
@@ -1321,9 +1582,13 @@ def Identify_significant_paths(
         })
         sample_results = sample_results.sort_values("Z_Score", ascending=False)  
         all_sample_results.append(sample_results)
-    all_sample_results = pd.concat(all_sample_results, ignore_index=True)
+    if len(all_sample_results) > 0:
+        all_sample_results = pd.concat(all_sample_results, ignore_index=True)
+    else:
+        all_sample_results = pd.DataFrame(
+            columns=["Sample_Name", "Path_Symbol", "Comm_Score", "Z_Score"]
+        )
     all_sample_results.to_csv(output_path, index=False)
-    print(f"Significant_L->R->TF->TG paths saved to {output_path}")
     
     return all_sample_results
 
@@ -1420,7 +1685,7 @@ def Identify_significant_paths_by_gene_role(
         output_path = output_dir + 'Significant_paths_' + gene_item + '.csv'
 
         if not os.path.exists(background_file) or not os.path.exists(sample_file):
-            print(f"Skipping {gene_item}: File not found")
+            # print(f"Skipping {gene_item}: File not found")
             continue
 
         try:
@@ -1564,7 +1829,7 @@ def Identify_significant_paths_celltype_by_gene_role(
         output_path = output_dir + 'Significant_paths_ct_' + gene_item + '.csv'
 
         if not os.path.exists(sig_path_file) or not os.path.exists(sample_ccc_file):
-            print(f"Skipping {gene_item}: Required files not found")
+            # print(f"Skipping {gene_item}: Required files not found")
             continue
 
         try:
@@ -1733,7 +1998,7 @@ def Identify_volatile_lr_pairs_celltype(data, threshold=None, method='mad'):
 
 
 
-def Identify_concat_lr_pairs_celltype(sig_LR_pair_celltype,vola_LR_pair_celltype,out_path):
+def Identify_concat_lr_pairs_celltype(sig_LR_pair_celltype,vola_LR_pair_celltype):
     merged = pd.merge(vola_LR_pair_celltype, 
                  sig_LR_pair_celltype[['LR_Symbol', 'Cell_Type']],
                  on=['LR_Symbol', 'Cell_Type'],
@@ -1745,81 +2010,80 @@ def Identify_concat_lr_pairs_celltype(sig_LR_pair_celltype,vola_LR_pair_celltype
     sig_LR_pair_celltype_updated = sig_LR_pair_celltype_updated.sort_values(['LR_Symbol', 'Cell_Type'])
     sig_LR_pair_celltype_updated = sig_LR_pair_celltype_updated.reset_index(drop=True)
     
-    sig_LR_pair_celltype_updated.to_csv(out_path, sep=",", index=False)
-    print(f"sig_LR_pair_celltype_updated saved to {out_path}")
     return sig_LR_pair_celltype_updated
 
 
 
-def calculate_path_strength_cellwise(
-    l_r_tf_tg_df: pd.DataFrame,
-    combined_npz_path: str,
-    global_row_names_path: str,
-    global_col_names_path: str,
-    ccc_lrp_path: str,
-    output_dir: str = "cellwise_cascade_results"
-) -> None:
-    os.makedirs(output_dir, exist_ok=True)
+# def calculate_path_strength_cellwise(
+#     l_r_tf_tg_df: pd.DataFrame,
+#     combined_npz_path: str,
+#     global_row_names_path: str,
+#     global_col_names_path: str,
+#     ccc_lrp_path: str,
+#     output_dir: str = "cellwise_cascade_results"
+# ) -> None:
+#     os.makedirs(output_dir, exist_ok=True)
     
-    print("Loading data...")
-    try:
-        combined_sparse = load_npz(combined_npz_path).tocsc()
-        with open(global_row_names_path, 'r') as f:
-            cell_names = json.load(f)
-        with open(global_col_names_path, 'r') as f:
-            r_tf_tg_pairs = json.load(f)
-        ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
-    print("Data loaded successfully")
+#     print("Loading data...")
+#     try:
+#         combined_sparse = load_npz(combined_npz_path).tocsc()
+#         with open(global_row_names_path, 'r') as f:
+#             cell_names = json.load(f)
+#         with open(global_col_names_path, 'r') as f:
+#             r_tf_tg_pairs = json.load(f)
+#         ccc_lrp_df = pd.read_csv(ccc_lrp_path, sep='\t', index_col=0)
+#     except Exception as e:
+#         print(f"Error loading data: {e}")
+#         return
+#     print("Data loaded successfully")
 
-    r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
+#     r_tf_tg_to_col = {pair: idx for idx, pair in enumerate(r_tf_tg_pairs)}
 
-    print("Identifying zero L-R pairs...")
-    zero_lr_pairs = set()
-    for col in ccc_lrp_df.columns:
-        if np.all(ccc_lrp_df[col] == 0):
-            zero_lr_pairs.add(col)
-    print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
+#     print("Identifying zero L-R pairs...")
+#     zero_lr_pairs = set()
+#     for col in ccc_lrp_df.columns:
+#         if np.all(ccc_lrp_df[col] == 0):
+#             zero_lr_pairs.add(col)
+#     print(f"Found {len(zero_lr_pairs)} zero L-R pairs to skip")
 
-    print("Processing all ligand-receptor-TF-TG paths...")
-    result_data = {}
+#     print("Processing all ligand-receptor-TF-TG paths...")
+#     result_data = {}
         
-    for _, row in tqdm(l_r_tf_tg_df.iterrows(), total=len(l_r_tf_tg_df), desc="Calculating paths"):
-        ligand = row['Ligand_Symbol']
-        receptor = row['Receptor_Symbol']
-        tf = row['TF_Symbol']
-        tg = row['TG_Symbol']
-        l_r_pair = f"{ligand}->{receptor}"
-        r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
-        path = f"{ligand}->{receptor}->{tf}->{tg}"
+#     for _, row in tqdm(l_r_tf_tg_df.iterrows(), total=len(l_r_tf_tg_df), desc="Calculating paths"):
+#         ligand = row['Ligand_Symbol']
+#         receptor = row['Receptor_Symbol']
+#         tf = row['TF_Symbol']
+#         tg = row['TG_Symbol']
+#         l_r_pair = f"{ligand}->{receptor}"
+#         r_tf_tg_pair = f"{receptor}->{tf}->{tg}"
+#         path = f"{ligand}->{receptor}->{tf}->{tg}"
         
-        if l_r_pair in zero_lr_pairs:
-            continue
+#         if l_r_pair in zero_lr_pairs:
+#             continue
             
-        if l_r_pair not in ccc_lrp_df.columns:
-            continue
+#         if l_r_pair not in ccc_lrp_df.columns:
+#             continue
             
-        if r_tf_tg_pair not in r_tf_tg_to_col:
-            continue
+#         if r_tf_tg_pair not in r_tf_tg_to_col:
+#             continue
             
-        col_idx = r_tf_tg_to_col[r_tf_tg_pair]
+#         col_idx = r_tf_tg_to_col[r_tf_tg_pair]
 
-        inter_signal = ccc_lrp_df[l_r_pair].values  
-        intra_signal = combined_sparse[:, col_idx].toarray().flatten()  
+#         inter_signal = ccc_lrp_df[l_r_pair].values  
+#         intra_signal = combined_sparse[:, col_idx].toarray().flatten()  
         
-        total_signal = inter_signal * intra_signal
-        result_data[path] = total_signal
+#         total_signal = inter_signal * intra_signal
+#         result_data[path] = total_signal
         
-    if result_data:
-        result_df = pd.DataFrame(result_data, index=cell_names)
-        output_path = os.path.join(output_dir, "cellwise_cascade_results.csv")
-        result_df.to_csv(output_path, index=True)
-        print(f"Processing completed. Results saved to {output_path}")
-    else:
-        print("No valid ligand-receptor-TF-TG paths found.")
-    
+#     if result_data:
+#         result_df = pd.DataFrame(result_data, index=cell_names)
+#         output_path = os.path.join(output_dir, "cellwise_cascade_results.csv")
+#         result_df.to_csv(output_path, index=True)
+#         print(f"Processing completed. Results saved to {output_path}")
+#     else:
+#         print("No valid ligand-receptor-TF-TG paths found.")
+
+
 
 
 def generate_neighbor_ligand_expression_matrix(base_path, cell_names=None, repeat_times=1):
@@ -2262,13 +2526,11 @@ def Identify_concat_paths_celltype(sig_LR_pair_celltype,vola_LR_pair_celltype,ou
     sig_LR_pair_celltype_updated = sig_LR_pair_celltype_updated.reset_index(drop=True)
     
     sig_LR_pair_celltype_updated.to_csv(out_path, sep=",", index=False)
-    print(f"sig_Path_pair_celltype_updated saved to {out_path}")
+    # print(f"sig_Path_pair_celltype_updated saved to {out_path}")
     return sig_LR_pair_celltype_updated
 
 
-def sig_LR_with_source_target(base_path,db,cell_type):
-    
-    ligand_unique = db['Ligand_Symbol'].unique()
+def sig_LR_with_source_target(sig_df,Nei_adj,rna_smooth,cell_type):
 
     to_lst = []
     path_lst = []
@@ -2278,9 +2540,6 @@ def sig_LR_with_source_target(base_path,db,cell_type):
     source_lst = []
     target_lst = []
     
-    sig_df = pd.read_csv(base_path+f'CCC/Significant_LRs.csv', index_col=None)
-    Nei_adj = pd.read_csv(f'{base_path}CCC/Nei_adj.csv', index_col=None, header=None, sep='\t')
-    rna_smooth = pd.read_csv(base_path+ f'CCC/expression_smooth.txt', index_col=0, sep='\t')
     Nei_adj_type = Nei_adj.copy()     
     
     for idx, row in sig_df.iterrows():
@@ -2317,13 +2576,11 @@ def sig_LR_with_source_target(base_path,db,cell_type):
         'comm_score': comm_score_lst,
         'z_score': z_score_lst
     })
-    results_df.to_csv(os.path.join(base_path, f'CCC/Significant_LRs_res.csv'), index=False)
-    print(f"Saved results for Significant_LRs to {os.path.join(base_path, f'CCC/Significant_LRs_res.csv')}, shape: {results_df.shape}")
 
     return results_df
     
     
-def sig_LR_with_source_target_celltypes(base_path, sif_df, agg_method='mean', min_cells_count=10):
+def sig_LR_with_source_target_celltypes(sif_df, agg_method='mean', min_cells_count=10):
     if not isinstance(sif_df, pd.DataFrame):
         raise ValueError("input needs to be pandas DataFrame")
     
@@ -2353,14 +2610,135 @@ def sig_LR_with_source_target_celltypes(base_path, sif_df, agg_method='mean', mi
                                           'comm_score': 'Comm_Score',
                                           'z_score': 'Z_Score'})
 
-    result_df.to_csv(base_path + f'CCC/Significant_LRs_res_celltype.csv', index=False)
-    print(f"Saved results for Significant_LRs_res_celltype to {base_path + f'CCC/Significant_LRs_res_celltype.csv'}, shape: {result_df.shape}")
-
     return result_df
 
 
-def sig_path_with_source_target(base_path, db, cell_type):
-    ligand_unique = db['Ligand_Symbol'].unique()
+
+def get_significant_pairs(
+    mc_adata,
+    background_inter_df,
+    celltype_key="cell_type",
+    alpha=0.05,
+    z_critical=None,
+    agg_method="mean",
+    volatile_threshold=2.5,
+    volatile_method="mad",
+    min_cells_count=10,
+):
+    """
+    Identify significant LR pairs using background CCC scores.
+
+    Results are stored in:
+    - mc_adata.uns["CCC"]["sig_LRs_received"]
+    - mc_adata.uns["CCC"]["sig_LRs_ct_received"]
+    - mc_adata.uns["CCC"]["sig_LRs_res"]
+    - mc_adata.uns["CCC"]["sig_LRs_res_ct"]
+    """
+
+    print('================================================================')
+    print('Performing significant LR pairs identification ...')
+    print('================================================================')
+
+    if "CCC" not in mc_adata.uns:
+        raise KeyError("mc_adata.uns['CCC'] does not exist.")
+
+    if "LRI_module_strength" not in mc_adata.uns["CCC"]:
+        raise KeyError("mc_adata.uns['CCC']['LRI_module_strength'] does not exist.")
+
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    sample_inter_df = mc_adata.uns["CCC"]["LRI_module_strength"].copy()
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+
+    lr_lst = sample_inter_df.columns.tolist()
+    common_lr = [lr for lr in lr_lst if lr in background_inter_df.columns]
+
+    if len(common_lr) == 0:
+        raise ValueError("No common LR columns between background_inter_df and sample_inter_df.")
+
+    sub_background_inter_df = background_inter_df.loc[:, common_lr].copy()
+    sample_inter_df = sample_inter_df.loc[:, common_lr].copy()
+
+    if "smooth_exp" in mc_adata.uns["CCC"]:
+        smooth_exp = mc_adata.uns["CCC"]["smooth_exp"]
+    if "Nei_adj" in mc_adata.uns["CCC"]:
+        Nei_adj = mc_adata.uns["CCC"]["Nei_adj"]
+
+    # 1. Significant LR pairs, cell level.
+    sig_LR_pair = Identify_significant_lr_pairs(
+        background_inter_df=sub_background_inter_df,
+        sample_inter_df=sample_inter_df,
+        z_critical=z_critical,
+        alpha=alpha,
+    )
+
+    # 2. Significant LR pairs, cell type level.
+    sig_LR_pair_celltype = Identify_significant_lr_pairs_celltype(
+        sig_LR_pair,
+        cell_clus,
+        agg_method=agg_method,
+    )
+
+    # 3. Volatile LR pairs across cell types.
+    merged = sample_inter_df.join(cell_clus)
+    sample_inter_ct_df = merged.groupby("cell_type").mean(numeric_only=True)
+    sample_inter_ct_df.index.name = None
+
+    (
+        vola_LR_pair_celltype,
+        vola_LR_pair_celltype_vscore,
+        vola_LR_pair_celltype_bin,
+        vola_LR_pair_celltype_report,
+    ) = Identify_volatile_lr_pairs_celltype(
+        sample_inter_ct_df,
+        threshold=volatile_threshold,
+        method=volatile_method,
+    )
+
+    # 4. Concatenate significant + volatile LR pairs.
+    sig_LR_pair_celltype_concat = Identify_concat_lr_pairs_celltype(
+        sig_LR_pair_celltype,
+        vola_LR_pair_celltype
+    )
+
+    # 5. Source-target LR result.
+    sig_LR_res = sig_LR_with_source_target(
+        sig_LR_pair,
+        Nei_adj,
+        smooth_exp,
+        cell_clus
+    )
+
+    # 6. Source-target cell type summary.
+    sig_LR_res_ct = sig_LR_with_source_target_celltypes(
+        sig_LR_res,
+        agg_method=agg_method,
+        min_cells_count=min_cells_count,
+    )
+
+    mc_adata.uns["CCC"]["sig_LRs_received"] = sig_LR_pair
+    mc_adata.uns["CCC"]["sig_LRs_ct_received"] = sig_LR_pair_celltype_concat
+    mc_adata.uns["CCC"]["sig_LRs_res"] = sig_LR_res
+    mc_adata.uns["CCC"]["sig_LRs_res_ct"] = sig_LR_res_ct
+
+    return mc_adata
+
+
+
+
+def sig_path_with_source_target(base_path, db, gene_role, cell_type, Nei_adj):
+    if gene_role not in ['Ligand_Symbol', 'TG_Symbol']:
+        raise ValueError("gene_role must be either 'Ligand_Symbol' or 'TG_Symbol'")
+    elif gene_role == 'Ligand_Symbol':
+        gene_lst = db['Ligand_Symbol'].dropna().unique()
+        stats_dir = base_path + 'CCC/Stats_results_Lig/'
+    else:
+        gene_lst = db['TG_Symbol'].dropna().unique()
+        stats_dir = base_path + 'CCC/Stats_results_TG/'
+
     to_lst = []
     path_lst = []
     comm_score_lst = []
@@ -2370,14 +2748,13 @@ def sig_path_with_source_target(base_path, db, cell_type):
     target_lst = []
         
     cell_type.rename(columns={'celltype': 'cell_type'}, inplace=True)     
-    Nei_adj = pd.read_csv(f'{base_path}CCC/Nei_adj.csv', index_col=None, header=None, sep='\t')
     
     Nei_adj_type = Nei_adj.copy()
     Nei_adj_type.index = cell_type.index
     Nei_adj_type = pd.concat([cell_type, Nei_adj_type], axis=1)
     
-    for ligand in tqdm(ligand_unique, desc="Processing ligands"):
-        sig_path_file = base_path+'CCC/Stats_results_Lig/Significant_paths_'+ligand+'.csv'
+    for gene in tqdm(gene_lst, desc=f"Processing {gene_role}s"):
+        sig_path_file = stats_dir + 'Significant_paths_' + str(gene) + '.csv'
         if not os.path.exists(sig_path_file):
             print(f"Warning: File not found - {sig_path_file}")
             continue
@@ -2402,8 +2779,6 @@ def sig_path_with_source_target(base_path, db, cell_type):
         'comm_score': comm_score_lst,
         'z_score': z_score_lst
     })
-    results_df.to_csv(os.path.join(base_path, f'CCC/Significant_paths_res.csv'), index=False)     
-    print(f"Saved results for Significant_paths to {os.path.join(base_path, f'CCC/Significant_paths_res.csv')}, shape: {results_df.shape}")
 
     return results_df
 
@@ -2438,10 +2813,241 @@ def sig_path_with_source_target_celltypes(base_path, sif_df, agg_method='mean', 
                                           'target': 'Target_Type',
                                           'comm_score': 'Comm_Score',
                                           'z_score': 'Z_Score'})
-    result_df.to_csv(os.path.join(base_path, f'CCC/Significant_paths_res_celltype.csv'), index=False)
-    print(f"Saved results for Significant_paths to {os.path.join(base_path, f'CCC/Significant_paths_res_celltype.csv')}, shape: {result_df.shape}")
 
     return result_df
+
+
+def get_significant_paths(
+    mc_adata,
+    base_path,
+    focus_L_R_TF_TG_df=None,
+    L_R_TF_TG_df=None,
+    background_inter_df=None,
+    celltype_key="cell_type",
+    ligand_wise=True,
+    tg_wise=True,
+    run_background=True,
+    run_source_target=True,
+    use_parallel=False,
+    threads=8,
+    background_number=10,
+    gene_role_for_source_target="Ligand_Symbol",
+    z_critical=None,
+    alpha=0.05,
+    volatile_threshold=0.1,
+    volatile_method="ratio",
+    agg_method="mean",
+    min_cells_count=10,
+):
+    """
+    Identify significant L-R-TF-TG paths using background path strength.
+
+    Stores:
+    - mc_adata.uns["CCC"]["sig_paths_ligand"]
+    - mc_adata.uns["CCC"]["sig_paths_ligand_ct"]
+    - mc_adata.uns["CCC"]["sig_paths_tg"]
+    - mc_adata.uns["CCC"]["sig_paths_tg_ct"]
+    - mc_adata.uns["CCC"]["sig_paths_res"]
+    - mc_adata.uns["CCC"]["sig_paths_res_ct"]
+    """
+    print('================================================================')     
+    print('Performing significant L-R-TF-TG paths identification ...')     
+    print('================================================================')
+
+    if not base_path.endswith("/"):
+        base_path += "/"
+
+    if "CCC" not in mc_adata.uns:
+        raise KeyError("mc_adata.uns['CCC'] does not exist.")
+
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    if L_R_TF_TG_df is None:
+        if "L-R-TF-TG_db" in mc_adata.uns["CCC"]:
+            L_R_TF_TG_df = mc_adata.uns["CCC"]["L-R-TF-TG_db"]
+        else:
+            raise KeyError(
+                "Please provide L_R_TF_TG_df or store it in "
+                "mc_adata.uns['CCC']['L_R_TF_TG_df']."
+            )
+
+    if focus_L_R_TF_TG_df is None:     
+        focus_L_R_TF_TG_df = L_R_TF_TG_df
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+
+    ccc_dir = base_path + "CCC/"
+    bg_dir = base_path + "Bg_CCC/"
+    lrtftg_dir = ccc_dir + "L_R_TF_TG/"
+
+    os.makedirs(ccc_dir, exist_ok=True)
+    os.makedirs(bg_dir, exist_ok=True)
+    os.makedirs(lrtftg_dir, exist_ok=True)
+
+    if "Nei_adj" not in mc_adata.uns["CCC"]:
+        raise KeyError("mc_adata.uns['CCC']['Nei_adj'] does not exist.")
+    else:
+        Nei_adj = mc_adata.uns["CCC"]["Nei_adj"]
+
+    # Prepare background LR matrix.
+    if background_inter_df is None:
+        bg_concat_path = bg_dir + "LRI_module_strength_concat.txt"
+
+        if not os.path.exists(bg_concat_path):
+            raise FileNotFoundError(
+                "background_inter_df is None and "
+                f"{bg_concat_path} does not exist."
+            )
+
+        background_inter_df = pd.read_csv(
+            bg_concat_path,
+            sep="\t",
+            index_col=0,
+        )
+
+    InterCCC_random_pidx = background_inter_df.copy()
+
+    for _ in tqdm(range(background_number), desc="Permuting InterCCC"):
+        InterCCC_random_pidx = InterCCC_random_pidx.iloc[
+            np.random.permutation(len(background_inter_df))
+        ]
+
+    InterCCC_random_pidx.index = background_inter_df.index
+
+    random_lri_path = bg_dir + "LRI_module_strength_concat_random_pidx.txt"
+
+    if run_background:
+        if ligand_wise:
+            if use_parallel:
+                generate_background_path_strength_parallel(
+                    l_r_tf_tg_df=L_R_TF_TG_df,
+                    combined_npz_path=ccc_dir + "R_TF_TG/combined_results.npz",
+                    global_row_names_path=ccc_dir + "R_TF_TG/combined_row_names.json",
+                    global_col_names_path=ccc_dir + "R_TF_TG/combined_col_names.json",
+                    ccc_lrp_df=InterCCC_random_pidx,
+                    output_dir=lrtftg_dir + "random_ligand_cascade_results",
+                    n_processes=threads,
+                    background_number=background_number,
+                )
+            else:
+                generate_background_path_strength(
+                    l_r_tf_tg_df=L_R_TF_TG_df,
+                    combined_npz_path=ccc_dir + "R_TF_TG/combined_results.npz",
+                    global_row_names_path=ccc_dir + "R_TF_TG/combined_row_names.json",
+                    global_col_names_path=ccc_dir + "R_TF_TG/combined_col_names.json",
+                    ccc_lrp_df=InterCCC_random_pidx,
+                    output_dir=lrtftg_dir + "random_ligand_cascade_results",
+                    background_number=background_number,
+                )
+
+        if tg_wise:
+            if use_parallel:
+                generate_background_path_strength_by_tg_parallel(
+                    l_r_tf_tg_df=L_R_TF_TG_df,
+                    combined_npz_path=ccc_dir + "R_TF_TG/combined_results.npz",
+                    global_row_names_path=ccc_dir + "R_TF_TG/combined_row_names.json",
+                    global_col_names_path=ccc_dir + "R_TF_TG/combined_col_names.json",
+                    ccc_lrp_df=InterCCC_random_pidx,
+                    output_dir=lrtftg_dir + "random_TG_cascade_results",
+                    n_processes=threads,
+                    background_number=background_number,
+                )
+            else:
+                generate_background_path_strength_by_tg(
+                    l_r_tf_tg_df=L_R_TF_TG_df,
+                    combined_npz_path=ccc_dir + "R_TF_TG/combined_results.npz",
+                    global_row_names_path=ccc_dir + "R_TF_TG/combined_row_names.json",
+                    global_col_names_path=ccc_dir + "R_TF_TG/combined_col_names.json",
+                    ccc_lrp_df=InterCCC_random_pidx,
+                    output_dir=lrtftg_dir + "random_TG_cascade_results",
+                    background_number=background_number,
+                )
+
+    if ligand_wise:
+        ligand_background_dir = lrtftg_dir + "random_ligand_cascade_results/"
+        
+        sig_path_dict_lig = Identify_significant_paths_by_gene_role(
+            base_path=base_path,
+            L_R_TF_TG_df=focus_L_R_TF_TG_df,
+            gene_role="Ligand_Symbol",
+            background_dir=ligand_background_dir,
+            sample_dir=lrtftg_dir + "ligand_cascade_results/",
+            output_dir=ccc_dir + "Stats_results_Lig/",
+            z_critical=z_critical,
+            alpha=alpha,
+        )
+
+        sig_path_ct_dict_lig = Identify_significant_paths_celltype_by_gene_role(
+            base_path=base_path,
+            L_R_TF_TG_df=focus_L_R_TF_TG_df,
+            celltype_df=cell_clus,
+            gene_role="Ligand_Symbol",
+            stats_dir=ccc_dir + "Stats_results_Lig/",
+            sample_dir=lrtftg_dir + "ligand_cascade_results/",
+            output_dir=ccc_dir + "Stats_results_Lig/",
+            volatile_threshold=volatile_threshold,
+            volatile_method=volatile_method,
+            agg_method=agg_method,
+        )
+
+        mc_adata.uns["CCC"]["sig_paths_ligand-wise"] = sig_path_dict_lig
+        mc_adata.uns["CCC"]["sig_paths_ligand-wise_ct"] = sig_path_ct_dict_lig
+
+    if tg_wise:
+        tg_background_dir = lrtftg_dir + "random_TG_cascade_results/"
+
+        sig_path_dict_tg = Identify_significant_paths_by_gene_role(
+            base_path=base_path,
+            L_R_TF_TG_df=focus_L_R_TF_TG_df,
+            gene_role="TG_Symbol",
+            background_dir=tg_background_dir,
+            sample_dir=lrtftg_dir + "TG_cascade_results/",
+            output_dir=ccc_dir + "Stats_results_TG/",
+            z_critical=z_critical,
+            alpha=alpha,
+        )
+
+        sig_path_ct_dict_tg = Identify_significant_paths_celltype_by_gene_role(
+            base_path=base_path,
+            L_R_TF_TG_df=focus_L_R_TF_TG_df,
+            celltype_df=cell_clus,
+            gene_role="TG_Symbol",
+            stats_dir=ccc_dir + "Stats_results_TG/",
+            sample_dir=lrtftg_dir + "TG_cascade_results/",
+            output_dir=ccc_dir + "Stats_results_TG/",
+            volatile_threshold=volatile_threshold,
+            volatile_method=volatile_method,
+            agg_method=agg_method,
+        )
+
+        mc_adata.uns["CCC"]["sig_paths_tg-wise"] = sig_path_dict_tg
+        mc_adata.uns["CCC"]["sig_paths_tg-wise_ct"] = sig_path_ct_dict_tg
+
+    if run_source_target:
+        if gene_role_for_source_target not in ["Ligand_Symbol", "TG_Symbol"]:
+            raise ValueError("gene_role_for_source_target must be 'Ligand_Symbol' or 'TG_Symbol'.")
+
+        sig_path_res = sig_path_with_source_target(
+            base_path,
+            focus_L_R_TF_TG_df,
+            gene_role_for_source_target,
+            cell_clus,
+            Nei_adj
+        )
+
+        sig_path_res_ct = sig_path_with_source_target_celltypes(
+            base_path,
+            sig_path_res,
+            agg_method=agg_method,
+            min_cells_count=min_cells_count,
+        )
+
+        mc_adata.uns["CCC"]["sig_paths_res"] = sig_path_res
+        mc_adata.uns["CCC"]["sig_paths_res_ct"] = sig_path_res_ct
+
+    return mc_adata
 
 
 
