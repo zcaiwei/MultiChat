@@ -6,22 +6,18 @@ import random
 import os
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import scipy.sparse as sp
 from tqdm import tqdm
+import sys 
 
-from sklearn.metrics import pairwise_distances
+
 from scipy.spatial.distance import cosine
 
-import sys 
-sys.path.append('/home/nas2/biod/zhencaiwei/RegChatz_V2/')
 
-if 'ipykernel' in sys.modules:     
-    sys.argv = sys.argv[:1]  
 
 
 def parameter_setting():
-    parser = argparse.ArgumentParser(description='Spatial transcriptomics analysis by HIN')
+    parser = argparse.ArgumentParser(description='Spatial transcriptomics cell-cell interaction by constrative learning')
     
     parser.add_argument('--inputPath', '-IP', type=str, default='Datasets/MISAR/', help='data directory')
     parser.add_argument('--outPath', '-od', type=str, default='Datasets/MISAR/CCC/', help='Output path')
@@ -34,18 +30,18 @@ def parameter_setting():
     parser.add_argument('--cci_pairs', '-cci_pairs', type=int, default = 4019, help='The number of receptors for each spot')
     parser.add_argument('--locMeasure', '-locMeas', type=str, default='euclidean', help='Calculate spot location similarity by euclidean')
     parser.add_argument('--Cell_pos_nos', '-CellPN', type=int, default=6, help='The number of positive cells for each cell')
-    parser.add_argument('--tau', '-tau', type=float, default=0.8)
-    parser.add_argument('--attn_drop', '-attn_drop', type=float, default=0.5)
-    parser.add_argument('--lr_cci', '-lr_cci', type=float, default=0.002, help='Learning rate')
+    parser.add_argument('--tau', '-tau', type=float, default=0.05)
+    parser.add_argument('--attn_drop', '-attn_drop', type=float, default=0)
+    parser.add_argument('--lr_cci', '-lr_cci', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--l2_coef', '-l2_coef', type=float, default=0)
-    parser.add_argument('--patience', '-patience', type=int, default=30)
+    parser.add_argument('--patience', '-patience', type=int, default=15)
     parser.add_argument('--use_cuda', dest='use_cuda', default=True, action='store_true', help="whether use cuda(default: True)")
     parser.add_argument('--gpu_id', type=int, default=0, help='GPU ID to use')
     parser.add_argument('--seed', type=int, default=200, help='Random seed for repeat results')
     parser.add_argument('--selected_cell_type', '-sct', type=str, default=None, help='Specify cell type to select nodes from (e.g. "Astro")')
     parser.add_argument('--cell_type_column', '-ctc', type=str, default='cell_type', help='Column name in annotation file containing cell type information')
     parser.add_argument('--k_neighbors', '-k', type=int, default=11, help='Number of nearest neighbors to include (including self)')
-    parser.add_argument('--InterCCC_Name', '-InterCCC_Name', type=str, default='CCC_module_LRP_strength.txt', help='Name of the InterCCC output file')
+    parser.add_argument('--InterCCC_Name', '-InterCCC_Name', type=str, default='LRI_module_strength.txt', help='Name of the InterCCC output file')
     
     return parser
 
@@ -53,75 +49,87 @@ def parameter_setting():
 
 
 
-def get_cell_positive_pairs(cell_clus, cell_loc, args):
+def get_cell_positive_pairs(mc_adata, args):
 	'''
  	get edges between cells: positive pairs
  	'''
-	cell_clus_values = cell_clus['cell_type'].values.astype('str')
+	from sklearn.metrics import pairwise_distances
+
+	cell_clus_values = mc_adata.obs[args.cell_type_column].astype(str).values
+	cell_loc = mc_adata.obsm['spatial'].astype(float)
+	
 	dist_out = pairwise_distances(cell_loc) 
-	cell_cell_adj = np.zeros((len(cell_clus), len(cell_clus)), dtype=int)
-	for index in range(len(cell_clus)):
+	
+	n_cells = mc_adata.n_obs
+	cell_cell_adj = np.zeros((n_cells, n_cells), dtype=int)
+	for index in range(n_cells):
 			match_int = np.where(cell_clus_values[index] == cell_clus_values)[0]
 			sorted_knn = dist_out[index, match_int].argsort()
 			cell_cell_adj[index, match_int[sorted_knn[:args.Cell_pos_nos]]] = 1
-	pd.DataFrame(cell_cell_adj).to_csv(args.outPath + args.pos_pair, header=None, index=None, sep='\t')
+	pos_pair = pd.DataFrame(cell_cell_adj)
+	
+	mc_adata.uns.setdefault("CCC", {})
+	mc_adata.uns["CCC"]["pos_pair"] = pos_pair
+
+	return mc_adata
 
 
 
 
-def load_ccc_data(args):
-    print("spot location for adjacency")
-    spot_loc = pd.read_table(args.spatialLocation, header=0, index_col=0, sep=',')
+def load_ccc_data(mc_adata, args):
+
+	from sklearn.metrics import pairwise_distances
+
+	print("spot location for adjacency")
+	spot_loc = mc_adata.uns['cell_loc'].astype(float)
+	
+	print("loading cell type annotations")
+	cell_type_df = mc_adata.obs['cell_type'].astype(str).to_frame()
+	
+	print("Calculating pairwise distances between spots")
+	dist_loc = pairwise_distances(spot_loc.values, metric=args.locMeasure)
+	sorted_knn = dist_loc.argsort(axis=1)
+
+	selected_node = []
+	
+	if args.selected_cell_type:
+		print(f"Selecting nodes for cell type: {args.selected_cell_type}")
+		safe_cell_type = args.selected_cell_type.replace('/', '-').replace(' ', '-')
+		selected_cell_samples = cell_type_df[cell_type_df['cell_type'] == args.selected_cell_type].index
+		selected_row_numbers = [cell_type_df.index.get_loc(idx) for idx in selected_cell_samples]
+		# print("selected cell type samples: ", selected_cell_samples)
     
-    print("loading cell type annotations")
-    cell_type_df = pd.read_csv(args.annoFile, header=0, index_col=0, sep="\t")
-    cell_type_df.rename(columns={'celltype': 'cell_type'}, inplace=True)
-    
-    print("Calculating pairwise distances between spots")
-    dist_loc = pairwise_distances(spot_loc.values, metric=args.locMeasure)
-    sorted_knn = dist_loc.argsort(axis=1)
-
-    selected_node = []
-    
-    if args.selected_cell_type:
-        print(f"Selecting nodes for cell type: {args.selected_cell_type}")
-        safe_cell_type = args.selected_cell_type.replace('/', '-').replace(' ', '-')
-        selected_cell_samples = cell_type_df[cell_type_df['cell_type'] == args.selected_cell_type].index
-        selected_row_numbers = [cell_type_df.index.get_loc(idx) for idx in selected_cell_samples]
-        # print("selected cell type samples: ", selected_cell_samples)
-    
-        for target_node in tqdm(range(len(cell_type_df)), desc="Processing nodes"):
-            all_neighbors = sorted_knn[target_node, :]
-            same_type_neighbors = [n for n in all_neighbors if n in selected_row_numbers]
-            top11_same_type = [target_node] + same_type_neighbors[:10]
+		for target_node in tqdm(range(len(cell_type_df)), desc="Processing nodes"):
+			all_neighbors = sorted_knn[target_node, :]
+			same_type_neighbors = [n for n in all_neighbors if n in selected_row_numbers]
+			top11_same_type = [target_node] + same_type_neighbors[:10]
 			
-            if len(top11_same_type) < 11:
-                print(f"Warning: Only found {len(top11_same_type)} neighbors for cell {target_node}")
+			if len(top11_same_type) < 11:
+				print(f"Warning: Only found {len(top11_same_type)} neighbors for cell {target_node}")
 			
-            selected_node.append(top11_same_type)
+			selected_node.append(top11_same_type)
 
-        pd.DataFrame(selected_node).to_csv(args.outPath + 'Nei_adj_' + safe_cell_type +'.csv', header=None, index=None, sep='\t')
+		mc_adata.uns["CCC"]["Nei_adj"] = pd.DataFrame(selected_node)
 
-    else:
-        for index in list(range(np.shape(dist_loc)[0])):
-            selected_node.append(sorted_knn[index, :11])
-        pd.DataFrame(selected_node).to_csv(args.outPath + 'Nei_adj.csv' , header=None, index=None, sep='\t')
+	else:
+		for index in list(range(np.shape(dist_loc)[0])):
+			selected_node.append(sorted_knn[index, :11])
+		mc_adata.uns["CCC"]["Nei_adj"] = pd.DataFrame(selected_node)
     
-    selected_node = np.array(selected_node)
-    selected_node = torch.LongTensor(selected_node)
+	selected_node = np.array(selected_node)
+	selected_node = torch.LongTensor(selected_node)
 
-    print("spot-ligand data")
-    spots_ligand = pd.read_table(args.Ligands_exp, header=0, index_col=0)
-    spots_ligand_n = torch.FloatTensor(spots_ligand.values)
+	print("spot-ligand data")
+	spots_ligand = mc_adata.uns["CCC"]["lig_exp"].reindex(mc_adata.obs_names)
+	spots_ligand_n = torch.FloatTensor(spots_ligand.values)
 
-    print("spot-receptor data")
-    spots_recep = pd.read_table(args.Receptors_exp, header=0, index_col=0)
-    spots_recep_n = torch.FloatTensor(spots_recep.values)
+	print("spot-receptor data")
+	spots_recep = mc_adata.uns["CCC"]["rec_exp"].reindex(mc_adata.obs_names)
+	spots_recep_n = torch.FloatTensor(spots_recep.values)
 
-    pos = pd.read_table(args.pos_pair, header=None, index_col=None).values
-    pos = torch.FloatTensor(pos)
+	pos = torch.FloatTensor(mc_adata.uns["CCC"]["pos_pair"].values)
 
-    return selected_node, spots_ligand_n, spots_recep_n, pos, spots_ligand.index, spots_ligand.columns
+	return mc_adata, selected_node, spots_ligand_n, spots_recep_n, pos, spots_ligand.index, spots_ligand.columns
 
 
 
@@ -143,6 +151,8 @@ def perturb_pos_pair_row(row):
 
 
 def get_CCC_data(adata, latent, args, threthold = 5):
+
+	import scanpy as sc
 
 	exp_data    = sp.csr_matrix.toarray(adata.X)
 	exp_data_n  = np.zeros( (exp_data.shape[0], exp_data.shape[1]) )
@@ -231,5 +241,17 @@ def adjust_learning_rate(init_lr, optimizer, iteration, max_lr, adjust_epoch):
 	return lr  
 
 
+# def save_mc_adata(mc_adata_res, base_path):
+#     """Prepare mc_adata_res.uns['CCC'] for h5ad serialization and save it."""
+#     mc_adata_res.uns["CCC"] = convert_sets(mc_adata_res.uns["CCC"])
 
+#     for key in ["Nei_adj", "pos_pair"]:
+#         if key in mc_adata_res.uns["CCC"]:
+#             mc_adata_res.uns["CCC"][key].columns = (
+#                 mc_adata_res.uns["CCC"][key].columns.astype(str)
+#             )
+
+#     mc_adata_res.write_h5ad(
+#         base_path + "inputs/mc_adata_after_get_sig_paths.h5ad"
+#     )
  

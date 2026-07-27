@@ -19,8 +19,8 @@ def get_sender_adj(Nei_adj, cell_type):
     num_cells = len(cell_type)
     adj = np.zeros((num_cells, num_cells))
     for _, row in Nei_adj.iterrows():
-        sender = int(row[0])
-        neighbors = row[1:].dropna().astype(int).tolist()
+        sender = int(row.iloc[0])
+        neighbors = row.iloc[1:].dropna().astype(int).tolist()
         for neighbor in neighbors:
             adj[sender][neighbor] = 1
     return adj
@@ -408,74 +408,256 @@ def plot_communication_double_panel(
     
     
     
+# def run_plot_communication_double_panel(
+#     path_name,
+#     base_path,
+#     cell_clus,
+#     cell_loc,
+#     meta_df,
+#     color_map,
+#     Sig_path_path,
+#     ccc,
+#     figpath=None,
+#     strength_scale=1,
+#     point_size=30,
+#     figsize=(10, 4)
+# ):
+#     """
+#     Run CCC multi-layer path analysis and plot communication.
+
+#     Parameters
+#     ----------
+#     path_name : str
+#         Multi-layer path (e.g., 'geneA->geneB->geneC->geneD')
+#     base_path : str
+#         Path to the base directory containing CCC data
+#     cell_clus : pd.DataFrame
+#         Cell type annotation
+#     cell_loc : pd.DataFrame
+#         Spatial coordinates(must contain 'x', 'y')
+#     meta_df : pd.DataFrame
+#         Visualization dataframe (x, y, color)
+#     color_map : dict
+#         Cell type color mapping
+#     Sig_path_path : str
+#         Path to Significant_paths.csv
+#     ccc : dict
+#         Precomputed communication strength dictionary
+#     figpath : str or None
+#         Output path (None = do not save)
+#     """
+
+#     nei_adj_path = base_path + 'CCC/Nei_adj.csv'
+#     if not os.path.exists(nei_adj_path):
+#         raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")
+#     print(f"Loading Nei_adj from: {nei_adj_path}")
+#     Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
+
+#     # ===== Step 1: adjacency =====
+#     adj = get_sender_adj(Nei_adj, cell_clus)
+
+#     # ===== Step 2: load significant paths =====
+#     Sig_path = pd.read_csv(Sig_path_path)
+
+#     # ===== Step 3: compute vectors =====
+#     res_all_df = get_Sig_all_vectors_mlpath(
+#         path_name, Sig_path, cell_clus, cell_loc, adj
+#     )
+
+#     res_weighted_df = get_Sig_weighted_one_vector_mlpath(res_all_df)
+
+#     # ===== Step 4: construct strength df =====
+#     Strength_lst = ccc[path_name]
+
+#     Strength_df = cell_loc.copy()
+#     Strength_df['Comm_Score'] = Strength_lst
+
+#     # log scaling
+#     # Strength_df['Comm_Score'] = np.log10(Strength_df['Comm_Score'] * 1e9 + 1e-10)
+
+#     # ===== Step 5: plot =====
+#     plot_communication_double_panel(
+#         strength_df=Strength_df,
+#         coord_df=meta_df,
+#         res_weighted_df=res_weighted_df,
+#         color_map=color_map,
+#         pathway_name=path_name,
+#         figpath=figpath,
+#         strength_scale=strength_scale,
+#         point_size=point_size,
+#         figsize=figsize
+#     )
+
+
+
 def run_plot_communication_double_panel(
+    mc_adata,                              
     path_name,
     base_path,
-    cell_clus,
-    cell_loc,
-    meta_df,
-    color_map,
-    Sig_path_path,
-    ccc,
+    color_map,                             
+    path_role="ligand",                    
+    gene_name=None,                        
+    celltype_key="cell_type",              
+    spatial_key="spatial",                 
+    Sig_path_path=None,                    
+    meta_df=None,                         
     figpath=None,
     strength_scale=1,
     point_size=30,
-    figsize=(10, 4)
+    figsize=(10, 4),
+    swap_xy=True,   
+    flip_x=False,                      
+    flip_y=True,                          
+    log_transform=False,                    
+    scale_factor=1e9,
+    eps=1e-10,
 ):
     """
-    Run CCC multi-layer path analysis and plot communication.
+    Plot double-panel communication flow for one L-R-TF-TG path.
 
-    Parameters
-    ----------
-    path_name : str
-        Multi-layer path (e.g., 'geneA->geneB->geneC->geneD')
-    base_path : str
-        Path to the base directory containing CCC data
-    cell_clus : pd.DataFrame
-        Cell type annotation
-    cell_loc : pd.DataFrame
-        Spatial coordinates(must contain 'x', 'y')
-    meta_df : pd.DataFrame
-        Visualization dataframe (x, y, color)
-    color_map : dict
-        Cell type color mapping
-    Sig_path_path : str
-        Path to Significant_paths.csv
-    ccc : dict
-        Precomputed communication strength dictionary
-    figpath : str or None
-        Output path (None = do not save)
+    Signal strength is loaded from:
+    - ligand-wise: base_path/CCC/L_R_TF_TG/ligand_cascade_results/{ligand}.csv
+    - TG-wise:     base_path/CCC/L_R_TF_TG/TG_cascade_results/{TG}.csv
     """
 
-    nei_adj_path = base_path + 'CCC/Nei_adj.csv'
-    if not os.path.exists(nei_adj_path):
-        raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")
-    print(f"Loading Nei_adj from: {nei_adj_path}")
-    Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
+    if not base_path.endswith("/"):
+        base_path += "/"
 
-    # ===== Step 1: adjacency =====
+    if "CCC" not in mc_adata.uns:
+        raise KeyError("mc_adata.uns['CCC'] does not exist.")
+
+    # ===== Step 0: cell type from adata =====
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    # ===== Step 0: spatial location from adata =====
+    if "cell_loc" in mc_adata.uns:
+        cell_loc = mc_adata.uns["cell_loc"].copy()
+    elif spatial_key in mc_adata.obsm:
+        cell_loc = pd.DataFrame(
+            mc_adata.obsm[spatial_key],
+            index=mc_adata.obs_names.astype(str),
+            columns=["x", "y"],
+        )
+    else:
+        raise KeyError(
+            "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+            f"or mc_adata.obsm['{spatial_key}']."
+        )
+
+    cell_loc.index = cell_loc.index.astype(str)
+
+    if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+        cell_loc = cell_loc.iloc[:, :2].copy()
+        cell_loc.columns = ["x", "y"]
+
+    if swap_xy:
+        cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+    
+    if flip_x:     
+        cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+    if flip_y:
+        cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+    common_cells = pd.Index(mc_adata.obs_names.astype(str))
+    cell_clus = cell_clus.loc[common_cells]
+    cell_loc = cell_loc.loc[common_cells]
+
+    # ===== Step 0: meta_df from adata + color_map =====
+    if meta_df is None:
+        meta_df = cell_loc.copy()
+        meta_df["cell_type"] = cell_clus["cell_type"]
+        meta_df["color"] = meta_df["cell_type"].map(color_map)
+    else:
+        meta_df = meta_df.copy()
+        meta_df.index = meta_df.index.astype(str)
+        meta_df = meta_df.loc[common_cells]
+
+    # ===== Step 1: adjacency from adata =====
+    if "Nei_adj" in mc_adata.uns["CCC"]:
+        Nei_adj = mc_adata.uns["CCC"]["Nei_adj"]
+        if not isinstance(Nei_adj, pd.DataFrame):
+            Nei_adj = pd.DataFrame(Nei_adj)
+    else:
+        raise FileNotFoundError(f"Nei_adj file not in: mc_adata.uns['CCC']")
+
     adj = get_sender_adj(Nei_adj, cell_clus)
 
-    # ===== Step 2: load significant paths =====
+    # ===== Step 2: load path strength csv, same logic as plot_comm_strength =====
+    path_parts = path_name.split("->")
+
+    if gene_name is None:
+        if path_role == "ligand":
+            gene_name = path_parts[0]
+        elif path_role in ["TG", "tg"]:
+            gene_name = path_parts[-1]
+        else:
+            raise ValueError("path_role must be 'ligand' or 'TG'.")
+
+    if path_role == "ligand":
+        score_file = os.path.join(
+            base_path,
+            "CCC/L_R_TF_TG/ligand_cascade_results",
+            f"{gene_name}.csv",
+        )
+    elif path_role in ["TG", "tg"]:
+        score_file = os.path.join(
+            base_path,
+            "CCC/L_R_TF_TG/TG_cascade_results",
+            f"{gene_name}.csv",
+        )
+    else:
+        raise ValueError("path_role must be 'ligand' or 'TG'.")
+
+    if not os.path.exists(score_file):
+        raise FileNotFoundError(f"Path score file does not exist: {score_file}")
+
+    ccc = pd.read_csv(score_file, index_col=0)
+    ccc.index = ccc.index.astype(str)
+
+    if path_name not in ccc.columns:
+        raise KeyError(f"{path_name} not found in {score_file}")
+
+    ccc = ccc.loc[common_cells]
+
+    # ===== Step 3: load significant path file =====
+    if Sig_path_path is None:
+        if path_role == "ligand":
+            Sig_path_path = base_path + f"CCC/Stats_results_Lig/Significant_paths_{gene_name}.csv"
+        else:
+            Sig_path_path = base_path + f"CCC/Stats_results_TG/Significant_paths_{gene_name}.csv"
+
+    if not os.path.exists(Sig_path_path):
+        raise FileNotFoundError(f"Significant path file does not exist: {Sig_path_path}")
+
     Sig_path = pd.read_csv(Sig_path_path)
 
-    # ===== Step 3: compute vectors =====
+    # ===== Step 4: compute vectors =====
     res_all_df = get_Sig_all_vectors_mlpath(
-        path_name, Sig_path, cell_clus, cell_loc, adj
+        path_name,
+        Sig_path,
+        cell_clus,
+        cell_loc,
+        adj
     )
 
     res_weighted_df = get_Sig_weighted_one_vector_mlpath(res_all_df)
 
-    # ===== Step 4: construct strength df =====
-    Strength_lst = ccc[path_name]
-
+    # ===== Step 5: construct strength df =====
     Strength_df = cell_loc.copy()
-    Strength_df['Comm_Score'] = Strength_lst
+    Strength_df["Comm_Score"] = ccc[path_name].values
 
-    # log scaling
-    # Strength_df['Comm_Score'] = np.log10(Strength_df['Comm_Score'] * 1e9 + 1e-10)
+    if log_transform:
+        Strength_df["Comm_Score"] = np.log10(
+            Strength_df["Comm_Score"] * scale_factor + eps
+        )
 
-    # ===== Step 5: plot =====
+    # ===== Step 6: plot =====
     plot_communication_double_panel(
         strength_df=Strength_df,
         coord_df=meta_df,
@@ -491,15 +673,13 @@ def run_plot_communication_double_panel(
 
 
 
-
-
 def find_signal_paths_with_relay(df):
     # dict：{receiver: [sender1, sender2, ...]}
     receiver_to_senders = defaultdict(list)
     
     for _, row in df.iterrows():
-        receiver = row[0] 
-        senders = row[1:].dropna().astype(int).tolist() 
+        receiver = row.iloc[0]
+        senders = row.iloc[1:].dropna().astype(int).tolist()
         receiver_to_senders[receiver].extend(senders)
     
     # all paths (x, relay, y)
@@ -560,10 +740,8 @@ def create_sig_x_relay_y(x_relay_y, sig_path):
 
 
 
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 
-def plot_comm_strength(
+def get_comm_strength(
     comm_item,
     comm_score,
     cell_loc,
@@ -631,18 +809,187 @@ def plot_comm_strength(
     plt.tight_layout()
     plt.show()
     
-    
+
+def plot_comm_strength(
+    mc_adata,
+    comm_item,
+    base_path=None,
+    score_type="auto",
+    path_role="ligand",
+    gene_name=None,
+    celltype_key="cell_type",
+    spatial_key="spatial",
+    swap_xy=True,
+    flip_x=False,
+    flip_y=True,
+    log_transform=True,
+    **kwargs,
+):
+    """
+    Automatically plot LR or L-R-TF-TG path strength.
+
+    Parameters
+    ----------
+    mc_adata : AnnData
+        MultiChat AnnData object.
+
+    comm_item : str
+        LR pair or path name.
+        Examples:
+        - 'Tgfb1->Tgfbr1_Tgfbr2'
+        - 'Pdgfa->Pdgfra->Atf4->Atp1b1'
+
+    base_path : str
+        Dataset base path. Required when plotting path score from files.
+
+    score_type : {'auto', 'lr', 'path'}
+        Which score matrix to use.
+
+    path_role : {'ligand', 'tg'}
+        For path plotting, read from ligand-wise or TG-wise result folder.
+
+    gene_name : str or None
+        File name used for path score. If None:
+        - ligand-wise: use first gene in comm_item
+        - tg-wise: use last gene in comm_item
+    """
+
+    import os
+    import pandas as pd
+
+    if "CCC" not in mc_adata.uns:
+        raise KeyError("mc_adata.uns['CCC'] does not exist.")
+
+    # ---------- cell location ----------
+    if "cell_loc" in mc_adata.uns:
+        cell_loc = mc_adata.uns["cell_loc"].copy()
+    elif spatial_key in mc_adata.obsm:
+        cell_loc = pd.DataFrame(
+            mc_adata.obsm[spatial_key],
+            index=mc_adata.obs_names,
+            columns=["x", "y"],
+        )
+    else:
+        raise KeyError(
+            "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+            f"or mc_adata.obsm['{spatial_key}']."
+        )
+
+    if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+        cell_loc = cell_loc.iloc[:, :2].copy()
+        cell_loc.columns = ["x", "y"]
+
+    if swap_xy:
+        cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+
+    if flip_x:     
+        cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+    if flip_y:
+        cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+    # ---------- cell type ----------
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+
+    # ---------- decide score type ----------
+    if score_type == "auto":
+        if comm_item.count("->") >= 3:
+            score_type = "path"
+        else:
+            score_type = "pair"
+
+    # ---------- LR pair score ----------
+    if score_type == "pair":
+        if "LRI_module_strength" not in mc_adata.uns["CCC"]:
+            raise KeyError("mc_adata.uns['CCC']['LRI_module_strength'] does not exist.")
+
+        comm_score = mc_adata.uns["CCC"]["LRI_module_strength"]
+
+    # ---------- path score ----------
+    elif score_type == "path":
+        if base_path is None:
+            raise ValueError("base_path is required when score_type='path'.")
+
+        if not base_path.endswith("/"):
+            base_path += "/"
+
+        path_parts = comm_item.split("->")
+
+        if gene_name is None:
+            if path_role == "ligand":
+                gene_name = path_parts[0]
+            elif path_role == "TG":
+                gene_name = path_parts[-1]
+            else:
+                raise ValueError("path_role must be 'ligand' or 'TG'.")
+
+        if path_role == "ligand":
+            score_file = os.path.join(
+                base_path,
+                "CCC/L_R_TF_TG/ligand_cascade_results",
+                f"{gene_name}.csv",
+            )
+        elif path_role == "TG":
+            score_file = os.path.join(
+                base_path,
+                "CCC/L_R_TF_TG/TG_cascade_results",
+                f"{gene_name}.csv",
+            )
+        else:
+            raise ValueError("path_role must be 'ligand' or 'TG'.")
+
+        if not os.path.exists(score_file):
+            raise FileNotFoundError(f"Path score file does not exist: {score_file}")
+
+        # comm_score = pd.read_csv(score_file, index_col=0)
+        score_header = pd.read_csv(score_file, nrows=0)
+        index_col = score_header.columns[0]
+
+        if comm_item not in score_header.columns:
+            raise KeyError(f"{comm_item} not found in communication score matrix.")
+
+        comm_score = pd.read_csv(
+            score_file,
+            usecols=[index_col, comm_item],
+            index_col=0,
+        )
+
+    else:
+        raise ValueError("score_type must be 'auto', 'pair', or 'path'.")
+
+    if comm_item not in comm_score.columns:
+        raise KeyError(f"{comm_item} not found in communication score matrix.")
+
+    return get_comm_strength(
+        comm_item=comm_item,
+        comm_score=comm_score,
+        cell_loc=cell_loc,
+        cell_clus=cell_clus,
+        log_transform=log_transform,
+        **kwargs,
+    )
+
+
     
 def plot_ccc_flow_for_signaling(
+    mc_adata,
     pathway_name,
-    Sig_LR_path,
     lr_with_pathway,
-    cell_clus,
-    cell_loc,
-    coord_df,
-    color_map,
+    Sig_LR_df=None,
+    cell_clus=None,
+    cell_loc=None,
+    coord_df=None,
+    color_map=None,
     base_path=None,
+    celltype_key="cell_type",
     mode='Pathway_Name',
+    swap_xy=True,   
+    flip_x=False,                           
+    flip_y=True, 
     alpha=0.6,
     point_size=30,
     arrow_scale=1e1,
@@ -657,8 +1004,8 @@ def plot_ccc_flow_for_signaling(
         Pathway name (e.g., 'EGF')
     Nei_adj : pd.DataFrame
         Neighbor adjacency matrix
-    Sig_LR_path : str
-        Path to Significant_LRs.csv
+    Sig_LR_df : pd.DataFrame
+        Significant_LRs in mc_adata
     lr_with_pathway : pd.DataFrame
         Mapping between LR pairs and pathways
     cell_clus : pd.DataFrame
@@ -680,17 +1027,69 @@ def plot_ccc_flow_for_signaling(
     rad : float
         Curvature of arrows
     """
-    nei_adj_path = base_path + 'CCC/Nei_adj.csv'     
-    if not os.path.exists(nei_adj_path):         
-        raise FileNotFoundError(f"[ERROR] Nei_adj file not found: {nei_adj_path}")     
-    print(f"Loading Nei_adj from: {nei_adj_path}")     
-    Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', index_col=None, header=None)
+    if cell_clus is None:
+        cell_clus = mc_adata.obs[[celltype_key]].copy()
+        cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    if cell_loc is None:
+        if "cell_loc" in mc_adata.uns:
+            cell_loc = mc_adata.uns["cell_loc"].copy()
+        elif 'spatial' in mc_adata.obsm:
+            cell_loc = pd.DataFrame(
+                mc_adata.obsm['spatial'],
+                index=mc_adata.obs_names.astype(str),
+                columns=["x", "y"],
+            )
+        else:
+            raise KeyError(
+                "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+                f"or mc_adata.obsm['spatial']."
+            )
+    cell_loc.index = cell_loc.index.astype(str)
+
+    if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+        cell_loc = cell_loc.iloc[:, :2].copy()
+        cell_loc.columns = ["x", "y"]
+
+    if swap_xy:
+        cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+
+    if flip_x:     
+        cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+    if flip_y:
+        cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+    if color_map is None:
+        cell_types = cell_clus["cell_type"].unique()
+        palette = sns.color_palette("tab20", len(cell_types))
+        color_map = dict(zip(cell_types, palette))
+
+    if coord_df is None:
+        coord_df = cell_loc.copy()
+        coord_df["cell_type"] = cell_clus["cell_type"]
+        coord_df["color"] = coord_df["cell_type"].map(color_map)
+
+    if Sig_LR_df is None:
+        if "CCC" in mc_adata.uns and "sig_LRs_received" in mc_adata.uns["CCC"]:
+            Sig_LR_df = mc_adata.uns["CCC"]["sig_LRs_received"]
+        else:
+            raise KeyError("mc_adata.uns['CCC']['sig_LRs_received'] does not exist.")
+    if not isinstance(Sig_LR_df, pd.DataFrame):
+        Sig_LR_df = pd.DataFrame(Sig_LR_df)
+
+    if "CCC" not in mc_adata.uns or "Nei_adj" not in mc_adata.uns["CCC"]:
+        raise KeyError("mc_adata.uns['CCC']['Nei_adj'] does not exist.")
+    Nei_adj = mc_adata.uns["CCC"]["Nei_adj"]
+    if not isinstance(Nei_adj, pd.DataFrame):
+        Nei_adj = pd.DataFrame(Nei_adj)
 
     # ===== Step 1: adjacency =====
     adj = get_sender_adj(Nei_adj, cell_clus)
 
-    # ===== Step 2: load significant LR =====
-    Sig_LR = pd.read_csv(Sig_LR_path)
+    # ===== Step 2: copy significant LR =====
+    Sig_LR = Sig_LR_df.copy()
 
     # ===== Step 3: map pathway =====
     pathway_mapping = lr_with_pathway.set_index('LR_Symbol')['Pathway_Name'].to_dict()
@@ -755,7 +1154,7 @@ def plot_ccc_flow_for_signaling(
     plt.legend(
         handles=handles,
         title='Cell types',
-        bbox_to_anchor=(1.30, 1),
+        bbox_to_anchor=(1.35, 1),
         loc='upper right'
     )
 
@@ -769,15 +1168,19 @@ def plot_ccc_flow_for_signaling(
 
 
 def plot_two_hop_signaling(
+    mc_adata,
     pathway_name,
     pair1,
     pair2,
-    base_path,
     lr_with_pathway,
-    cell_clus,
-    cell_loc,
-    coord_df,
-    color_map,
+    celltype_key="cell_type",
+    cell_clus=None,
+    cell_loc=None,
+    coord_df=None,
+    color_map=None,
+    swap_xy=True,   
+    flip_x=False,                                
+    flip_y=True, 
     arrow_scale=1e1,
     rad=0.2,
     alpha=0.6,
@@ -794,8 +1197,6 @@ def plot_two_hop_signaling(
         First-hop LR pair (X -> Relay)
     pair2 : str
         Second-hop LR pair (Relay -> Y)
-    base_path : str
-        Base directory for input files
     cell_clus : pd.DataFrame
         Cell type annotations
     cell_loc : pd.DataFrame
@@ -813,10 +1214,53 @@ def plot_two_hop_signaling(
     point_size : int
         Scatter point size
     """
+    if cell_clus is None:
+        cell_clus = mc_adata.obs[[celltype_key]].copy()
+        cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    if cell_loc is None:
+        if "cell_loc" in mc_adata.uns:
+            cell_loc = mc_adata.uns["cell_loc"].copy()
+        elif 'spatial' in mc_adata.obsm:
+            cell_loc = pd.DataFrame(
+                mc_adata.obsm['spatial'],
+                index=mc_adata.obs_names.astype(str),
+                columns=["x", "y"],
+            )
+        else:
+            raise KeyError(
+                "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+                f"or mc_adata.obsm['spatial']."
+            )
+    cell_loc.index = cell_loc.index.astype(str)
+
+    if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+        cell_loc = cell_loc.iloc[:, :2].copy()
+        cell_loc.columns = ["x", "y"]
+
+    if swap_xy:
+        cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+    
+    if flip_x:     
+        cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+    if flip_y:
+        cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+    if color_map is None:
+        cell_types = cell_clus["cell_type"].unique()
+        palette = sns.color_palette("tab20", len(cell_types))
+        color_map = dict(zip(cell_types, palette))
+
+    if coord_df is None:
+        coord_df = cell_loc.copy()
+        coord_df["cell_type"] = cell_clus["cell_type"]
+        coord_df["color"] = coord_df["cell_type"].map(color_map)
 
     # ===== Load data =====
-    Nei_adj = pd.read_csv(base_path + 'CCC/Nei_adj.csv', sep='\t', header=None, index_col=None)
-    Sig_LR = pd.read_csv(base_path + 'CCC/Significant_LRs.csv')
+    Nei_adj = mc_adata.uns['CCC']['Nei_adj']
+    Sig_LR = mc_adata.uns['CCC']['sig_LRs_received']
     
     lr_with_pathway['LR_Symbol'] = (
         lr_with_pathway['Ligand_Symbol'] + '->' + lr_with_pathway['Receptor_Symbol']
@@ -944,20 +1388,69 @@ def plot_two_hop_signaling(
 
 
 def plot_effective_two_hop_signaling(
-    base_path,
-    coord_df,
-    color_map,
+    mc_adata,
     pair1,
     pair2,
+    celltype_key="cell_type",
+    cell_clus=None,
+    cell_loc=None,
+    coord_df=None,
+    color_map=None,
+    swap_xy=True,
+    flip_x=False,
+    flip_y=True, 
     can_trans_gene='NCAM1',
     strength_scale=1e1,
     arrow_rad=0.2,
     point_size=10,
     figsize=(8, 8)
 ):
+    if cell_clus is None:
+        cell_clus = mc_adata.obs[[celltype_key]].copy()
+        cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    if cell_loc is None:
+        if "cell_loc" in mc_adata.uns:
+            cell_loc = mc_adata.uns["cell_loc"].copy()
+        elif 'spatial' in mc_adata.obsm:
+            cell_loc = pd.DataFrame(
+                mc_adata.obsm['spatial'],
+                index=mc_adata.obs_names.astype(str),
+                columns=["x", "y"],
+            )
+        else:
+            raise KeyError(
+                "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+                f"or mc_adata.obsm['spatial']."
+            )
+    cell_loc.index = cell_loc.index.astype(str)
+
+    if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+        cell_loc = cell_loc.iloc[:, :2].copy()
+        cell_loc.columns = ["x", "y"]
+
+    if swap_xy:
+        cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+    
+    if flip_x:     
+        cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+    if flip_y:
+        cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+    if color_map is None:
+        cell_types = cell_clus["cell_type"].unique()
+        palette = sns.color_palette("tab20", len(cell_types))
+        color_map = dict(zip(cell_types, palette))
+
+    if coord_df is None:
+        coord_df = cell_loc.copy()
+        coord_df["cell_type"] = cell_clus["cell_type"]
+        coord_df["color"] = coord_df["cell_type"].map(color_map)
 
     # ===== 1. Load data =====
-    Sig_path = pd.read_csv(base_path + 'CCC/Significant_paths_res.csv')
+    Sig_path = mc_adata.uns['CCC']['sig_paths_res'].copy()
 
     condition = Sig_path['path_symbol'].str.startswith(can_trans_gene)
 
@@ -999,8 +1492,6 @@ def plot_effective_two_hop_signaling(
         linewidths=0
     )
 
-    # plt.gca().invert_yaxis()
-    # plt.gca().invert_xaxis()
 
     # ===== 5. Draw XR arrows =====
     for _, row in cur_xr.iterrows():
@@ -1119,12 +1610,18 @@ def build_gene_relay_two_hop_events(sig_path, focus_gene):
 
 def plot_two_hop_cell_identity(
     focus_gene,
+    mc_adata,
     base_path=None,
     coord_df=None,
     coord=None,
     cell_type=None,
     color_map=None,
     merged_df=None,
+    celltype_key="cell_type",
+    spatial_key="spatial",
+    swap_xy=True,
+    flip_x=False,
+    flip_y=True,
     figsize=(18, 5),
     bg_color="#D3D3D3",
     bg_size=15,
@@ -1164,17 +1661,70 @@ def plot_two_hop_cell_identity(
 
     df = merged_df.copy()
 
-    # ===== Build coord_df if not provided =====
+    # ===== Build coord_df from mc_adata / provided coordinates =====
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    if color_map is None:
+        cell_types = cell_clus["cell_type"].unique()
+        palette = sns.color_palette("tab20", len(cell_types))
+        color_map = dict(zip(cell_types, palette))
+
     if coord_df is None:
-        if coord is None or cell_type is None or color_map is None:
-            raise ValueError("Please provide either coord_df, or coord + cell_type + color_map.")
+        if coord is not None:
+            cell_loc = coord.copy()
+            cell_loc.index = cell_loc.index.astype(str)
 
-        coord_df = coord.copy()
+            if cell_type is not None:
+                cell_type = cell_type.copy()
+                cell_type.index = cell_type.index.astype(str)
+                if "cell_type" not in cell_type.columns and "celltype" in cell_type.columns:
+                    cell_type = cell_type.rename(columns={"celltype": "cell_type"})
+                cell_clus = cell_type
+        else:
+            if "cell_loc" in mc_adata.uns:
+                cell_loc = mc_adata.uns["cell_loc"].copy()
+            elif spatial_key in mc_adata.obsm:
+                cell_loc = pd.DataFrame(
+                    mc_adata.obsm[spatial_key],
+                    index=mc_adata.obs_names.astype(str),
+                    columns=["x", "y"],
+                )
+            else:
+                raise KeyError(
+                    "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+                    f"or mc_adata.obsm['{spatial_key}']."
+                )
 
-        if "cell_type" not in cell_type.columns and "celltype" in cell_type.columns:
-            cell_type = cell_type.rename(columns={"celltype": "cell_type"})
+            cell_loc.index = cell_loc.index.astype(str)
 
-        coord_df["color"] = cell_type.loc[coord_df.index, "cell_type"].map(color_map)
+        if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+            cell_loc = cell_loc.iloc[:, :2].copy()
+            cell_loc.columns = ["x", "y"]
+
+        if swap_xy:
+            cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+
+        if flip_x:     
+            cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+        if flip_y:
+            cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+        coord_df = cell_loc.copy()
+        coord_df["cell_type"] = cell_clus.loc[coord_df.index, "cell_type"]
+        coord_df["color"] = coord_df["cell_type"].map(color_map)
+    else:
+        coord_df = coord_df.copy()
+        coord_df.index = coord_df.index.astype(str)
+
+        if "color" not in coord_df.columns:
+            coord_df["cell_type"] = cell_clus.loc[coord_df.index, "cell_type"]
+            coord_df["color"] = coord_df["cell_type"].map(color_map)
 
     # ===== Compatible column names =====
     source_col = "X_name" if "X_name" in df.columns else "X_Name"
@@ -1241,12 +1791,18 @@ def plot_two_hop_cell_identity(
 
 def plot_two_hop_cell_identity_combined(
     focus_gene,
+    mc_adata,
     base_path=None,
     coord_df=None,
     coord=None,
     cell_type=None,
     color_map=None,
     merged_df=None,
+    celltype_key="cell_type",
+    spatial_key="spatial",
+    swap_xy=True,
+    flip_x=False,
+    flip_y=True,
     figsize=(6, 5),
     bg_color="#D3D3D3",
     bg_size=15,
@@ -1295,17 +1851,72 @@ def plot_two_hop_cell_identity_combined(
 
     df = merged_df.copy()
 
-    # ===== Build coord_df if not provided =====
+    # ===== Build coord_df from mc_adata / provided coordinates =====
+    if celltype_key not in mc_adata.obs.columns:
+        raise KeyError(f"{celltype_key} not found in mc_adata.obs.")
+
+    cell_clus = mc_adata.obs[[celltype_key]].copy()
+    cell_clus = cell_clus.rename(columns={celltype_key: "cell_type"})
+    cell_clus.index = cell_clus.index.astype(str)
+
+    if color_map is None:
+        cell_types = cell_clus["cell_type"].unique()
+        palette = sns.color_palette("tab20", len(cell_types))
+        color_map = dict(zip(cell_types, palette))
+
     if coord_df is None:
-        if coord is None or cell_type is None or color_map is None:
-            raise ValueError("Please provide either coord_df, or coord + cell_type + color_map.")
+        if coord is not None:
+            cell_loc = coord.copy()
+            cell_loc.index = cell_loc.index.astype(str)
 
-        coord_df = coord.copy()
+            if cell_type is not None:
+                cell_type = cell_type.copy()
+                cell_type.index = cell_type.index.astype(str)
 
-        if "cell_type" not in cell_type.columns and "celltype" in cell_type.columns:
-            cell_type = cell_type.rename(columns={"celltype": "cell_type"})
+                if "cell_type" not in cell_type.columns and "celltype" in cell_type.columns:
+                    cell_type = cell_type.rename(columns={"celltype": "cell_type"})
 
-        coord_df["color"] = cell_type.loc[coord_df.index, "cell_type"].map(color_map)
+                cell_clus = cell_type
+        else:
+            if "cell_loc" in mc_adata.uns:
+                cell_loc = mc_adata.uns["cell_loc"].copy()
+            elif spatial_key in mc_adata.obsm:
+                cell_loc = pd.DataFrame(
+                    mc_adata.obsm[spatial_key],
+                    index=mc_adata.obs_names.astype(str),
+                    columns=["x", "y"],
+                )
+            else:
+                raise KeyError(
+                    "Cannot find cell coordinates. Need mc_adata.uns['cell_loc'] "
+                    f"or mc_adata.obsm['{spatial_key}']."
+                )
+
+            cell_loc.index = cell_loc.index.astype(str)
+
+        if "x" not in cell_loc.columns or "y" not in cell_loc.columns:
+            cell_loc = cell_loc.iloc[:, :2].copy()
+            cell_loc.columns = ["x", "y"]
+
+        if swap_xy:
+            cell_loc[["x", "y"]] = cell_loc[["y", "x"]].to_numpy()
+        
+        if flip_x:     
+            cell_loc["x"] = cell_loc["x"].max() - cell_loc["x"]
+
+        if flip_y:
+            cell_loc["y"] = cell_loc["y"].max() - cell_loc["y"]
+
+        coord_df = cell_loc.copy()
+        coord_df["cell_type"] = cell_clus.loc[coord_df.index, "cell_type"]
+        coord_df["color"] = coord_df["cell_type"].map(color_map)
+    else:
+        coord_df = coord_df.copy()
+        coord_df.index = coord_df.index.astype(str)
+
+        if "color" not in coord_df.columns:
+            coord_df["cell_type"] = cell_clus.loc[coord_df.index, "cell_type"]
+            coord_df["color"] = coord_df["cell_type"].map(color_map)
 
     # ===== Compatible column names =====
     source_col = "X_name" if "X_name" in df.columns else "X_Name"
@@ -1464,14 +2075,25 @@ def plot_top_signal_ranked_abundance(
     if "to_cell" not in sig_pair_res.columns:
         raise ValueError("sig_pair_res must contain column 'to_cell'.")
 
-    if "path_symbol" not in sig_pair_res.columns:
-        raise ValueError("sig_pair_res must contain column 'path_symbol'.")
+    if "path_symbol" not in sig_pair_res.columns and "lr_symbol" not in sig_pair_res.columns:
+        raise ValueError(
+            "sig_pair_res must contain either 'path_symbol' or 'lr_symbol'."
+        )
+
+    focus_sig_lrp = sig_pair_res[
+        sig_pair_res["to_cell"].isin(focus_samples)
+    ].copy()
+    # choose identifier column
+    if "path_symbol" in sig_pair_res.columns:
+        sig_col = "path_symbol"
+    else:
+        sig_col = "lr_symbol"
 
     focus_sig_lrp = sig_pair_res[
         sig_pair_res["to_cell"].isin(focus_samples)
     ].copy()
 
-    path_counts = focus_sig_lrp["path_symbol"].value_counts()
+    path_counts = focus_sig_lrp[sig_col].value_counts()
 
     if len(path_counts) == 0:
         raise ValueError(f"No significant paths targeting {focus_cell} cells.")
@@ -1496,16 +2118,6 @@ def plot_top_signal_ranked_abundance(
     plt.xlabel("Communication signals", fontsize=12)
     plt.ylabel("Communication abundance (n)", fontsize=12)
     plt.xticks(rotation=45, ha="right")
-
-    for p in ax.patches:
-        ax.annotate(
-            f"{int(p.get_height())}",
-            (p.get_x() + p.get_width() / 2., p.get_height()),
-            ha="center",
-            va="center",
-            xytext=(0, 5),
-            textcoords="offset points"
-        )
 
     plt.tight_layout()
     plt.show()

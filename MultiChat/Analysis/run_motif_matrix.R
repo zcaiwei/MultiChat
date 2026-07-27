@@ -10,16 +10,42 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(dplyr)
   library(TFBSTools)
-  library(BSgenome.Mmusculus.UCSC.mm10)
+  # library(BSgenome.Mmusculus.UCSC.mm10)
 })
 
 # ----------------------- Command-line parameters----------------------- #
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 2) {
-  stop("Usage: Rscript run_motif_matrix.R <input_count_csv> <output_dir>")
+if (length(args) < 3) {
+  stop("Usage: Rscript run_motif_matrix.R <input_count_csv> <output_dir> <genome>")
 }
 input_file <- args[1]
 output_dir <- args[2]
+genome_name <- tolower(args[3])
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+genome_config <- switch(
+  genome_name,
+  "hg38" = list(package = "BSgenome.Hsapiens.UCSC.hg38", species = "Homo sapiens"),
+  "mm10" = list(package = "BSgenome.Mmusculus.UCSC.mm10", species = "Mus musculus"),
+  stop("Unsupported genome: ", genome_name, ". Supported genomes: hg38, mm10.")
+)
+
+if (!requireNamespace(genome_config$package, quietly = TRUE)) {
+  stop(
+    "Required package is not installed: ", genome_config$package,
+    ". Please install it before running motif matching."
+  )
+}
+
+suppressPackageStartupMessages(
+  library(genome_config$package, character.only = TRUE)
+)
+
+genome <- get(genome_config$package)
+species <- genome_config$species
 
 if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE)
@@ -29,7 +55,7 @@ if (!dir.exists(output_dir)) {
 counts <- t(read.csv(input_file, header = TRUE, row.names = 1))
 peak_list <- rownames(counts)
 
-# 转换为 GRanges
+# convert to GRanges
 peaks_gr <- GRanges(
   seqnames = sub("\\..*", "", peak_list),
   ranges = IRanges(
@@ -39,14 +65,18 @@ peaks_gr <- GRanges(
 )
 
 # ----------------------- step2: build RangedSummarizedExperiment ----------------------- #
-genome <- BSgenome.Mmusculus.UCSC.mm10
 se <- SummarizedExperiment(assays = list(counts = as.matrix(counts)), rowRanges = peaks_gr)
 se_gc <- addGCBias(se, genome = genome)
 
 # ----------------------- step3: motif databases ----------------------- #
-source("/Applications/WHUer/notebooks/MultiChat-main/MultiChat/Data_preprocessing/get_motif_list.R")  
+args_all <- commandArgs(trailingOnly = FALSE)
+file_arg <- "--file="
+script_path <- normalizePath(sub(file_arg, "", args_all[grep(file_arg, args_all)]))
+script_dir <- dirname(script_path)
 
-species <- "Mus musculus"
+source(file.path(script_dir, "get_motif_list.R"))
+
+species <- genome_config$species
 collection <- "CORE"
 version <- 1
 
