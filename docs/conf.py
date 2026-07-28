@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 project = "MultiChat"
 author = "Caiwei Zhen"
 copyright = "2026, Caiwei Zhen"
-release = "0.2.0"
+release = "0.2.2"
 
 extensions = [
     "sphinx.ext.autodoc",

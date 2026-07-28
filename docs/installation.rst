@@ -11,7 +11,7 @@ To install a specific version:
 
 .. code-block:: bash
 
-   pip install scMultiChat==0.2.0
+   pip install scMultiChat==0.2.2
 
 Then check the installation:
 
